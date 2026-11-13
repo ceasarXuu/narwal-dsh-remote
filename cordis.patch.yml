@@ -1,0 +1,24 @@
+# Narwal Server — local connection bridge for the Narwal iOS client.
+#
+# The plugin runs inside the DSH desktop runtime (same ctx tree). M1 plan:
+#   1. pairing tokens live in this config document (per-entry persistence,
+#      edited by the settings Narwal section through configForms)
+#   2. a WebSocket server on `port` speaks Narwal Protocol v1 (M1 next step)
+#   3. mDNS advertisement under `advertiseName` (_narwal._tcp) follows
+#
+# `tokens` entries: { id, label, createdAt, secret } — secret is the whole
+# credential; the settings panel copies full payloads, mobile authenticates
+# against this list.
+- insert:
+    - id: narwal-server
+      name: 'narwal-dsh-remote'
+      config:
+        port: 48317
+        advertiseName: narwal
+        relay:
+          enabled: false
+          url: ''
+          ticket: ''
+        lanHost: ''
+        tokens: []
+        devices: []

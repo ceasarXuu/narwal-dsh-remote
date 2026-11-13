@@ -1,0 +1,60 @@
+{
+  "name": "narwal-dsh-remote",
+  "version": "0.4.2",
+  "description": "Narwal Server: local connection bridge (pairing tokens, QR, mDNS, Narwal Protocol v1 over WebSocket) that lets the Narwal iOS client drive this DSH instance.",
+  "type": "module",
+  "license": "MIT",
+  "author": "narwal",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ceasarXuu/narwal-dsh-remote.git"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "narwal",
+    "remote",
+    "ios"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0",
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org",
+    "provenance": false
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "impl.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE",
+    "vendor/toqr.mjs",
+    "vendor/LICENSE-toqr.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "scripts": {
+    "check": "node scripts/check-client.mjs",
+    "pack": "node scripts/pack.mjs"
+  },
+  "private": true
+}
