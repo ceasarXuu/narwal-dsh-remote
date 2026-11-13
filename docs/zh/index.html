@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Narwal 插件将 iPhone 上的 Narwal App 与桌面端的 DeepSeek Harness 连接起来。">
+  <title>Narwal for DeepSeek Harness</title>
+  <link rel="alternate" hreflang="en" href="../">
+  <link rel="icon" href="../narwal.png">
+  <link rel="stylesheet" href="../site.css">
+</head>
+<body>
+  <header><div class="frame">
+    <a class="brand" href="./"><img src="../narwal.png" width="38" height="38" alt="">Narwal</a>
+    <nav class="links" aria-label="主导航">
+      <a href="https://github.com/ceasarXuu/narwal-dsh-remote">GitHub</a>
+      <a href="../" lang="en">English</a>
+    </nav>
+  </div></header>
+  <main>
+    <section class="hero"><div class="frame">
+      <h1><span>桌面 DSH，</span><span>手机接着用</span></h1>
+      <div class="hero-end"><p>Narwal 插件将 iPhone 上的 Narwal App 与桌面端的 DeepSeek Harness 连接起来。通过同一 Wi-Fi 配对，在手机上继续使用 DSH 会话。</p><a class="button" href="#install">安装</a></div>
+    </div></section>
+    <section class="setup frame" id="install">
+      <h2>从桌面到手机</h2>
+      <ol class="steps"><li><h3>安装插件</h3><p>在 DSH 的「设置 → 插件」中搜索并安装 <code>narwal-dsh-remote</code>，然后重启 DSH。如果使用命令行管理独立的 profile，可用以下命令。</p><pre><code>dsh plugin --profile &lt;your-profile&gt; add narwal-dsh-remote</code></pre></li>
+<li><h3>创建配对令牌</h3><p>在桌面端打开「设置 → Narwal」，创建配对令牌并打开二维码。</p></li>
+<li><h3>用 iPhone 配对</h3><p>在同一 Wi-Fi 下，在 Narwal App 中扫描二维码或粘贴配对链接。可在 DSH 中撤销令牌来断开设备。</p></li></ol>
+      <a href="https://www.npmjs.com/package/narwal-dsh-remote">在 npm 上查看软件包</a>
+    </section>
+  </main>
+  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">隐私政策 · 草稿</a><a href="service.html">服务声明 · 草稿</a></div></div></footer>
+</body>
+</html>

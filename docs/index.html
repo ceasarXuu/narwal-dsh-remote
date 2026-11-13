@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Connect the Narwal iPhone app to DeepSeek Harness on your desktop.">
+  <title>Narwal for DeepSeek Harness</title>
+  <link rel="alternate" hreflang="zh-CN" href="zh/">
+  <link rel="icon" href="./narwal.png">
+  <link rel="stylesheet" href="./site.css">
+</head>
+<body>
+  <header><div class="frame">
+    <a class="brand" href="./"><img src="./narwal.png" width="38" height="38" alt="">Narwal</a>
+    <nav class="links" aria-label="Main navigation">
+      <a href="https://github.com/ceasarXuu/narwal-dsh-remote">GitHub</a>
+      <a href="zh/" lang="zh-CN">简体中文</a>
+    </nav>
+  </div></header>
+  <main>
+    <section class="hero"><div class="frame">
+      <h1><span>DSH on</span><span>your iPhone.</span></h1>
+      <div class="hero-end"><p>Pair Narwal with DeepSeek Harness over Wi-Fi and pick up your DSH sessions on your iPhone.</p><a class="button" href="#install">Install</a></div>
+    </div></section>
+    <section class="setup frame" id="install">
+      <h2>From desktop to iPhone</h2>
+      <ol class="steps"><li><h3>Install the plugin</h3><p>In DSH, open Settings → Plugins, install <code>narwal-dsh-remote</code>, and restart DSH. For a CLI-managed profile, use this command.</p><pre><code>dsh plugin --profile &lt;your-profile&gt; add narwal-dsh-remote</code></pre></li>
+<li><h3>Create a pairing token</h3><p>On the desktop, open Settings → Narwal. Create a pairing token and open its QR code.</p></li>
+<li><h3>Pair your iPhone</h3><p>On the same Wi-Fi, open Narwal and scan the QR code or paste the pairing link. Revoke the token in DSH to disconnect the device.</p></li></ol>
+      <a href="https://www.npmjs.com/package/narwal-dsh-remote">View package on npm</a>
+    </section>
+  </main>
+  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">Privacy Policy · Draft</a><a href="service.html">Service Statement · Draft</a></div></div></footer>
+</body>
+</html>
