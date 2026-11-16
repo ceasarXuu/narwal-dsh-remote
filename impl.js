@@ -827,6 +827,7 @@ async function build(ctx, config) {
 
 export async function start(ctx, config) {
 	const bridge = await build(ctx, config)
+	if (!bridge) throw new Error('ws module unavailable; bridge not started')
 	return {
 		stop() {
 			try { bridge?.disposeAll?.() } catch { /* nop */ }
