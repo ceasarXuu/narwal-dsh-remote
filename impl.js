@@ -32,9 +32,10 @@ const VERSION = (() => {
 		return 'unknown'
 	}
 })()
-import { networkInterfaces, userInfo } from 'node:os'
+import { homedir, networkInterfaces, userInfo } from 'node:os'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
 const TOKEN_ACTIONS = ['create', 'revoke']
@@ -797,7 +798,7 @@ class NarwalBridge {
 async function build(ctx, config) {
 	let wsMod = null
 	try {
-		wsMod = await import('ws').catch(() => null) ?? await runtimeWs()
+		wsMod = unwrapWs(await import('ws').catch(() => null)) ?? await runtimeWs()
 	} catch { wsMod = null }
 	if (!wsMod?.WebSocketServer) {
 		ctx.logger('narwal-server').warn('ws module unavailable; bridge disabled this session')
@@ -832,13 +833,26 @@ export async function start(ctx, config) {
 		},
 	}
 }
+/** ws 是 CJS：直接导入 index.js 时命名导出挂在 default 上。 */
+function unwrapWs(mod) {
+	return mod?.WebSocketServer ? mod : mod?.default ?? mod
+}
+
 async function runtimeWs() {
+	/* 软链安装时 impl.js 的真实路径在仓库里，裸 import('ws') 解析不到 DSH 的依赖 */
+	for (const base of [process.env.DSH_HOME, join(homedir(), '.dsh')]) {
+		if (!base) continue
+		try {
+			const mod = unwrapWs(await import(pathToFileURL(join(base, 'profiles', 'node_modules', 'ws', 'index.js')).href))
+			if (mod?.WebSocketServer) return mod
+		} catch { /* try next */ }
+	}
 	try {
 		const argv1 = process.argv[1] ?? ''
 		const cutAt = argv1.indexOf('/node_modules/')
 		if (cutAt > 0) {
 			const root = argv1.slice(0, cutAt)
-			return await import(`file://${root}/node_modules/ws/index.js`)
+			return unwrapWs(await import(`file://${root}/node_modules/ws/index.js`))
 		}
 	} catch { /* not reachable */ }
 	return null
