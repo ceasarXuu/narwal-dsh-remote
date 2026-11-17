@@ -32,7 +32,7 @@ const VERSION = (() => {
 		return 'unknown'
 	}
 })()
-import { homedir, networkInterfaces, userInfo } from 'node:os'
+import { homedir, hostname, networkInterfaces, userInfo } from 'node:os'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -644,7 +644,7 @@ class NarwalBridge {
 		}
 		this.send(device, {
 			event: 'hello',
-			payload: { sessionId, label: device.label, host: this.hostLabel(), account: this.account },
+		payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account },
 		})
 		this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
