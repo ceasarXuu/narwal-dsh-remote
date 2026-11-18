@@ -11,112 +11,78 @@ window.__ModuleLoader__.load({
 		/* ------------------------------------------------------------------ */
 		const en = {
 			nav: 'Narwal',
-			sectionDesc: 'Pair your iOS client to drive this DeepSeek Harness instance.',
-			port: 'Server port',
-			portDesc: 'Local WebSocket port of the Narwal bridge.',
-			advertise: 'Advertised name',
-			advertiseDesc: 'Name shown on your phone when pairing.',
-			tokens: 'Pairing tokens',
-			tokenDesc: 'One token per device. Tokens are long-lived credentials — revoke immediately when a device is lost.',
-			createToken: 'Create token',
-			tokenLabel: 'Device label',
-			copied: 'Copied',
-			copy: 'Copy',
-			pairingUsage: 'Open Narwal on the phone, choose “Add host”, and paste the payload below (QR scan coming next iteration).',
-			revoke: 'Revoke',
-			relayTitle: 'Relay (experimental)',
-			relayDesc: 'Route the phone through a relay when it is away from this network.',
-			relayEnabled: 'Enable relay',
-			relayTicketHint: 'Relay ticket',
-			liveDevices: 'Connected devices',
-			noDevices: 'No device connected.',
-			createHint: 'Create the first token here — it is the credential every device will use.',
-			failed: 'Save failed',
-			noTokens: 'No devices paired yet.',
-			lanHost: 'LAN host (IP)',
-			lanHostDesc: 'IP your phone reaches on the WiFi — used in pairing payloads (leave empty to auto-detect: 127.0.0.1 is never usable from a phone).'
+			sectionDesc: 'Pair the Narwal iOS app to drive this DeepSeek Harness from your phone.',
+			addDevice: 'Add device',
+			emptyTitle: 'No device paired yet',
+			emptyDesc: 'Generate a QR code, then scan it with Narwal on your phone.',
+			emptyAction: 'Generate pairing QR code',
+			devices: 'Paired devices',
+			online: 'Online',
+			offline: 'Not connected',
+			showQr: 'QR code',
+			hideQr: 'Hide',
+			scanHint: 'Open Narwal on your phone and scan this code.',
+			remove: 'Remove',
+			removeConfirm: 'Remove this device? It will be disconnected and must be paired again.',
+			deviceName: 'iPhone',
+			unavailable: 'Narwal service is starting up…',
+			failed: 'Operation failed'
 		}
 		const zh = {
 			nav: 'Narwal',
-			sectionDesc: '把 iOS 客户端配对到这台 DeepSeek Harness。',
-			port: '服务端口',
-			portDesc: 'Narwal 桥接的本地 WebSocket 端口。',
-			advertise: '广播名称',
-			advertiseDesc: '配对时手机上显示的名称。',
-			tokens: '配对令牌',
-			tokenDesc: '每台设备一枚。令牌是长期凭证 —— 设备遗失请立即吊销。',
-			createToken: '创建令牌',
-			tokenLabel: '设备标签',
-			copied: '已复制',
-			copy: '复制',
-			pairingUsage: '在手机 Narwal 应用里选「添加主机」,粘贴下方配对串(下一版提供扫码)。',
-			revoke: '吊销',
-			relayTitle: 'Relay（实验）',
-			relayDesc: '手机不在同一网络时，通过 relay 中转流量。',
-			relayEnabled: '启用 relay',
-			relayTicketHint: 'Relay ticket',
-			liveDevices: '在线设备',
-			noDevices: '当前没有设备连接。',
-			createHint: '先在这里创建第一枚令牌 —— 它就是你手机连接用的凭证。',
-			failed: '保存失败',
-			noTokens: '还没有配对的设备。',
-			lanHost: '局域网地址(IP)',
-			lanHostDesc: '手机在 WiFi 内可直达的本机 IP —— 用于配对串(留空自动探测;127.0.0.1 手机不可用)。'
-		}
-
-		/* ------------------------------------------------------------------ */
-		/* helpers                                                             */
-		/* ------------------------------------------------------------------ */
-		function buildPayload(secret, host, port, advertise, relay) {
-			const params = new URLSearchParams({ v: '1', host, port: String(port), token: secret })
-			if (advertise) params.set('name', advertise)
-			if (relay?.enabled && relay.url && relay.ticket) {
-				/* phone 直接走 relay;LAN 信息保留做后备展示 */
-				params.set('relay', relay.url)
-				params.set('ticket', relay.ticket)
-			}
-			return `narwal://pair?${params}`
+			sectionDesc: '配对 Narwal iOS 客户端，在手机上操控这台 DeepSeek Harness。',
+			addDevice: '添加设备',
+			emptyTitle: '还没有配对设备',
+			emptyDesc: '生成二维码，用手机上的 Narwal 扫描即可连接。',
+			emptyAction: '生成配对二维码',
+			devices: '已配对设备',
+			online: '在线',
+			offline: '未连接',
+			showQr: '二维码',
+			hideQr: '收起',
+			scanHint: '打开手机上的 Narwal，扫描此二维码。',
+			remove: '移除',
+			removeConfirm: '移除该设备？它会被断开，需要重新配对。',
+			deviceName: 'iPhone',
+			unavailable: 'Narwal 服务正在启动…',
+			failed: '操作失败'
 		}
 
 		/* ------------------------------------------------------------------ */
 		/* styles(inline,theme-agnostic)                                      */
 		/* ------------------------------------------------------------------ */
-		const sub = { color: 'var(--dsw-alias-label-secondary, #888)', fontSize: 12, lineHeight: '18px', wordBreak: 'break-all' }
+		const border = '0.5px solid var(--dsw-alias-border-l2, #ddd)'
+		const sub = { color: 'var(--dsw-alias-label-secondary, #888)', fontSize: 12, lineHeight: '18px' }
 		const title = { fontSize: 14, lineHeight: '20px', fontWeight: 600 }
-		const row = { borderBottom: '0.5px solid var(--dsw-alias-border-l2, #ddd)', justifyContent: 'space-between', alignItems: 'center', gap: 24, padding: '16px 0', display: 'flex' }
-		const btn = { padding: '4px 10px', fontSize: 12, cursor: 'pointer' }
-		const btnDanger = { ...btn, color: '#c00' }
-		const input = { padding: '6px 8px', fontSize: 13, border: '1px solid var(--dsw-alias-border-l2, #ccc)', borderRadius: 6, width: 180 }
-		const createRow = { display: 'flex', gap: 8, marginTop: 8 }
+		const btn = { padding: '5px 12px', fontSize: 12, cursor: 'pointer', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2, #ccc)', background: 'transparent', color: 'inherit' }
+		const btnDanger = { ...btn, color: '#e5484d' }
+		const card = { border, borderRadius: 10, overflow: 'hidden' }
 
 		/* ------------------------------------------------------------------ */
 		/* components                                                          */
 		/* ------------------------------------------------------------------ */
-		function TokenRow(props) {
-			const { token, host, port, advertise, t, onRevoke, onRelabel, relay } = props
-			const payload = buildPayload(token.secret, host, port, advertise, relay)
-			const [copied, setCopied] = useState(false)
-			const copy = useCallback(() => {
-				try { navigator.clipboard?.writeText(payload) } catch {}
-				setCopied(true)
-				setTimeout(() => setCopied(false), 1500)
-			}, [payload])
-			return React.createElement('div', { style: row },
-				React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-					React.createElement('div', { style: title }, token.label || token.id),
-					React.createElement('div', { style: sub }, payload),
-					React.createElement('img', {
-						src: `http://${bridgeHost}:${port}/qr.svg?token=${encodeURIComponent(token.secret)}`,
-						alt: 'narwal pairing QR', width: 132, height: 132,
-						style: { marginTop: 8, imageRendering: 'pixelated', background: '#fff', padding: 4, borderRadius: 6 }
-					})),
-				React.createElement('button', { style: btn, onClick: copy, title: payload }, copied ? t('copied') : t('copy')),
-				React.createElement('button', { style: btn, onClick: () => {
-					const next = window.prompt?.('重命名设备标签', token.label ?? '') ?? null
-					if (next && next.trim()) void onRelabel(token.id, next)
-				} }, '✎'),
-				React.createElement('button', { style: btnDanger, onClick: () => onRevoke(token) }, t('revoke')),
-			)
+		function QrBlock(props) {
+			const { token, port, t } = props
+			return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '8px 0 20px' } },
+				React.createElement('img', {
+					src: `http://${bridgeHost}:${port}/qr.svg?token=${encodeURIComponent(token.secret)}`,
+					alt: 'Narwal pairing QR', width: 176, height: 176,
+					style: { imageRendering: 'pixelated', background: '#fff', padding: 8, borderRadius: 10 }
+				}),
+				React.createElement('div', { style: sub }, t('scanHint')))
+		}
+
+		function DeviceRow(props) {
+			const { token, online, open, first, port, t, onToggle, onRemove } = props
+			return React.createElement('div', { style: first ? null : { borderTop: border } },
+				React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' } },
+					React.createElement('span', { style: { width: 8, height: 8, borderRadius: 4, flex: 'none', background: online ? '#2f9e5e' : '#c4c4c4' } }),
+					React.createElement('div', { style: { flex: 1, minWidth: 0 } },
+						React.createElement('div', { style: title }, token.label || token.id),
+						React.createElement('div', { style: sub }, online ? t('online') : t('offline'))),
+					React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')),
+					React.createElement('button', { style: btnDanger, onClick: onRemove }, t('remove'))),
+				open ? React.createElement(QrBlock, { token, port, t }) : null)
 		}
 
 		/*
@@ -135,211 +101,106 @@ window.__ModuleLoader__.load({
 				if (this.state.error) {
 					return React.createElement('div', {
 						style: { padding: 16, fontSize: 13, lineHeight: 1.6, color: '#e5484d', fontFamily: 'ui-monospace, monospace', whiteSpace: 'pre-wrap' }
-					}, 'Narwal 面板渲染失败：\n' + String(this.state.error && this.state.error.stack || this.state.error))
+					}, 'Narwal panel failed to render:\n' + String(this.state.error && this.state.error.stack || this.state.error))
 				}
 				return this.props.children
 			}
 		}
 
 		function NarwalSection(props) {
-			const { t, form, write } = props
+			const { t, form } = props
 			let snapshot = null
 			try { snapshot = (typeof form.getSnapshot === 'function' ? form.getSnapshot() : form.get?.()) } catch {}
-			const value = snapshot?.value ?? { port: 48317, advertiseName: 'narwal', tokens: [] }
-			const [label, setLabel] = useState('')
+			const port = Number(snapshot?.value?.port) || 48317
+			const [tokens, setTokens] = useState(null)
+			const [online, setOnline] = useState([])
+			const [openId, setOpenId] = useState(null)
 			const [failed, setFailed] = useState(false)
-			const [devices, setDevices] = useState(null)
-			const [result, setResult] = useState(null)
-			const [relayState, setRelayState] = useState(null)
+			const stopRef = useRef(false)
+			const secretRef = useRef('')
+			const base = `http://${bridgeHost}:${port}`
 
-			const statsTokenHint = useCallback(() => (Array.isArray(result?.tokens) ? result.tokens : (value.tokens ?? []))[0]?.secret ?? '', [value, result])
-
-			const refreshTokens = useCallback(async () => {
-				const secret = statsTokenHint()
-				const qs = secret ? `?token=${encodeURIComponent(secret)}` : ''
+			const refresh = useCallback(async () => {
+				const qs = secretRef.current ? `?token=${encodeURIComponent(secretRef.current)}` : ''
 				try {
-					const res = await fetch(`http://${bridgeHost}:${value.port}/tokens${qs}`)
-					if (!res.ok) { setResult(null); return }
+					const res = await fetch(`${base}/tokens${qs}`)
+					if (!res.ok) throw new Error(String(res.status))
 					const body = await res.json()
-					if (!stopRef.current) setResult(body)
-				} catch { if (!stopRef.current) setResult(null) }
-			}, [statsTokenHint, value.port])
+					const list = Array.isArray(body?.tokens) ? body.tokens : []
+					secretRef.current = list[0]?.secret ?? ''
+					if (stopRef.current) return
+					setTokens(list)
+					if (!list.length) { setOnline([]); return }
+					const stats = await fetch(`${base}/stats?token=${encodeURIComponent(secretRef.current)}`)
+					const info = stats.ok ? await stats.json() : null
+					if (!stopRef.current) setOnline(Array.isArray(info?.devices) ? info.devices.map((d) => d.tokenId) : [])
+				} catch {
+					if (!stopRef.current) setTokens(null)
+				}
+			}, [base])
 
-			const kickDevice = useCallback(async (sessionId) => {
-				const secret = statsTokenHint()
-				if (!secret) return false
+			useEffect(() => {
+				stopRef.current = false
+				void refresh()
+				const timer = setInterval(refresh, 5000)
+				return () => { stopRef.current = true; clearInterval(timer) }
+			}, [refresh])
+
+			/* 本机面板免 secret：host 端对 loopback + DSH Origin 放行 */
+			const post = useCallback(async (payload) => {
+				const qs = secretRef.current ? `?token=${encodeURIComponent(secretRef.current)}` : ''
 				try {
-					const res = await fetch(`http://${bridgeHost}:${value.port}/devices?token=${encodeURIComponent(secret)}`, {
+					const res = await fetch(`${base}/tokens${qs}`, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify({ sessionId }),
+						body: JSON.stringify(payload)
 					})
-					return res.ok
-				} catch { return false }
-			}, [statsTokenHint, value.port])
-
-			const adminAction = useCallback(async (payload) => {
-				const secret = statsTokenHint()
-				/* 本机面板免 secret：host 端对 loopback + DSH Origin 放行 */
-				const qs = secret ? `?token=${encodeURIComponent(secret)}` : ''
-				try {
-					const res = await fetch(`http://${bridgeHost}:${value.port}/tokens${qs}`, {
-						method: 'POST',
-						headers: { 'content-type': 'application/json' },
-						body: JSON.stringify(payload),
-					})
-					if (!res.ok) {
-						setFailed(`HTTP ${res.status}: ${(await res.text().catch(() => '')).slice(0, 160)}`)
-						return false
-					}
-					if (payload?.action === 'create') {
-						/* 新令牌需要立刻进入本地快照，否则后续调用仍然没有 secret 可用 */
-						const created = await res.json().catch(() => null)
-						if (created && created.secret) {
-							setResult((prev) => ({ tokens: [...(prev?.tokens ?? []), created] }))
-						}
-					}
-					await refreshTokens()
-					return true
+					if (!res.ok) throw new Error(String(res.status))
+					setFailed(false)
+					return await res.json().catch(() => null)
 				} catch {
 					setFailed(true)
-					return false
+					return null
 				}
-			}, [statsTokenHint, value.port, refreshTokens])
+			}, [base])
 
-			// 设备动态/重载用例
-			const stopRef = useRef(false)
-			useEffect(() => () => { stopRef.current = true }, [])
-			useEffect(() => {
-				let stop = false
-				const poll = async () => {
-					const secret = statsTokenHint()
-					void refreshTokens()
-					if (!secret) { setDevices(null); setRelayState(null); return }
-					try {
-						const res = await fetch(`http://${bridgeHost}:${value.port}/stats?token=${encodeURIComponent(secret)}`)
-						if (!res.ok) { setDevices(null); return }
-						const body = await res.json()
-						if (!stop) setDevices(Array.isArray(body?.devices) ? body.devices : [])
-					} catch {
-						if (!stop) setDevices(null)
-					}
-					try {
-						const rs = await fetch(`http://${bridgeHost}:${value.port}/relay-status?token=${encodeURIComponent(secret)}`)
-						if (rs.ok) {
-							const body = await rs.json()
-							if (!stop) setRelayState(body?.enabled ? body : null)
-						}
-					} catch {
-						if (!stop) setRelayState(null)
-					}
+			const addDevice = async () => {
+				const created = await post({ action: 'create', label: `${t('deviceName')} ${(tokens?.length ?? 0) + 1}` })
+				if (created?.id) {
+					if (created.secret && !secretRef.current) secretRef.current = created.secret
+					setOpenId(created.id)
 				}
-				void poll()
-				const timer = setInterval(poll, 5000)
-				return () => { stop = true; clearInterval(timer) }
-			}, [statsTokenHint, value.port])
-
-			const hostCard = () => {
-				const meta = result
-				if (!meta) return null
-				return React.createElement('div', { style: { ...row, borderBottom: 'none', padding: '10px 0' } },
-					React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-						React.createElement('div', { style: title }, `${meta.pairHost ?? '?'}:${meta.port ?? value.port}`),
-						React.createElement('div', { style: sub },
-							`${meta.advertiseName ?? ''} · 令牌 ${meta.tokens ?? '?'} 枚 · 在线设备 ${Array.isArray(devices) ? devices.length : '?'} 台 · ${hostLabelNow()}`)))
+				await refresh()
 			}
-			const hostLabelNow = () => (value.advertiseName || 'narwal')
-
-			const create = () => {
-				const name = (label || 'iPhone').trim()
-				setLabel('')
-				void adminAction({ action: 'create', label: name })
+			const remove = async (token) => {
+				if (typeof window.confirm === 'function' && !window.confirm(t('removeConfirm'))) return
+				await post({ action: 'revoke', id: token.id })
+				if (openId === token.id) setOpenId(null)
+				await refresh()
 			}
 
-			const autoHost = (globalThis.location && bridgeHost) || 'lan-host'
-			const host = value.lanHost || (autoHost === '127.0.0.1' || autoHost === 'localhost' ? '' : autoHost) || 'LAN-IP-未设置'
-			return React.createElement('div', { style: { maxWidth: 640 } },
-				React.createElement('p', { style: sub }, t('sectionDesc')),
-				hostCard(),
-				React.createElement('div', { style: row },
-					React.createElement('div', null,
-						React.createElement('div', { style: title }, t('port')),
-						React.createElement('div', { style: sub }, t('portDesc'))),
-					React.createElement('input', {
-						style: input, value: value.port ?? '',
-						onChange: (e) => write('port', Number(e.target.value) || 0)
-					})),
-				React.createElement('div', { style: row },
-					React.createElement('div', null,
-						React.createElement('div', { style: title }, t('advertise')),
-						React.createElement('div', { style: sub }, t('advertiseDesc'))),
-					React.createElement('input', {
-						style: input, value: value.advertiseName ?? '',
-						onChange: (e) => write('advertiseName', e.target.value)
-					})),
-				React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 16, marginTop: 18 } },
-					React.createElement('div', null,
-						React.createElement('div', { style: title }, t('lanHost')),
-						React.createElement('div', { style: sub }, t('lanHostDesc'))),
-					React.createElement('input', {
-						style: { ...input, width: 220 }, value: value.lanHost ?? '',
-						placeholder: '自动检测',
-						onChange: (e) => write('lanHost', e.target.value)
-					})),
-				React.createElement('div', { style: { ...title, marginTop: 24 } }, t('tokens')),
-				React.createElement('div', { style: sub }, t('tokenDesc')),
-				React.createElement('div', { style: createRow },
-					React.createElement('input', {
-						style: { ...input, width: 140 }, placeholder: t('tokenLabel'),
-						value: label, onChange: (e) => setLabel(e.target.value)
-					}),
-					React.createElement('button', { style: btn, onClick: create }, t('createToken'))),
-				failed
-					? React.createElement('div', { style: { color: '#e5484d', marginTop: 8, fontSize: 12, whiteSpace: 'pre-wrap' } },
-						typeof failed === 'string' ? failed : t('failed'))
-					: null,
-				!((result?.tokens) ?? []).length
-					? React.createElement('p', { style: sub }, t('noTokens'))
-					: (result.tokens ?? [{ id: 'unknown', label: '(刷新中)', secret: '' }]).map((tok) => React.createElement(TokenRow, {
-						key: tok.id, token: tok, host, port: value.port, advertise: value.advertiseName, t,
-						onRevoke: (dead) => { void adminAction({ action: 'revoke', id: dead.id }) },
-						onRelabel: (id, label) => { void adminAction({ action: 'relabel', id, label }).then(() => void refreshTokens()) }
-					})),
-				React.createElement('div', { style: { ...title, marginTop: 24, display: 'flex', flexDirection: 'column', gap: 10 } },
-					React.createElement('div', { style: title }, t('relayTitle')),
-					React.createElement('div', { style: sub }, t('relayDesc')),
-					relayState && React.createElement('div', { style: { ...sub, color: relayState.state === 'connected' ? '#2f9e5e' : '#bbb' } },
-						relayState.state === 'connected'
-							? `已连接 ${relayState.url} ✓`
-							: `状态 ${relayState.state}${relayState.hasTicket ? '' : '(缺 ticket)'}`),
-					React.createElement('label', { style: { display: 'flex', gap: 8, alignItems: 'center' } },
-						React.createElement('input', {
-							type: 'checkbox',
-							checked: value.relay?.enabled === true,
-							onChange: (e) => write('relay.enabled', e.target.checked),
-						}),
-						React.createElement('span', { style: { fontSize: 13 } }, t('relayEnabled'))),
-					React.createElement('input', {
-						style: { ...input, width: 320 }, placeholder: 'wss://relay.example.com', value: value.relay?.url ?? '',
-						onChange: (e) => write('relay.url', e.target.value)
-					}),
-					React.createElement('input', {
-						style: { ...input, width: 320 }, placeholder: t('relayTicketHint'), value: value.relay?.ticket ?? '',
-						onChange: (e) => write('relay.ticket', e.target.value)
-					})),
-				React.createElement('div', { style: { ...title, marginTop: 24 } }, t('liveDevices')),
-				React.createElement('div', null, Array.isArray(devices)
-					? devices.length === 0 ? React.createElement('div', { style: sub }, t('noDevices'))
-						: devices.map((d) => React.createElement('div', { key: d.sessionId, style: { ...sub, display: 'flex', gap: 8, alignItems: 'center' } },
-							React.createElement('span', { style: { flex: 1 } },
-								`${d.label ?? d.sessionId} · ${d.streams} 条实时流${d.connectedAt ? ' · ' + new Date(d.connectedAt).toLocaleTimeString() : ''}`),
-							React.createElement('button', {
-								style: { ...btnDanger, fontSize: 11, padding: '2px 8px' },
-								onClick: () => { void kickDevice(d.sessionId) },
-								title: '断开该设备(其自动重连会因鉴权不清而重试)'
-							}, '断开')))
-					: React.createElement('div', { style: sub }, '…')),
-				React.createElement('p', { style: { ...sub, marginTop: 20 } }, t('pairingUsage'))
+			return React.createElement('div', { style: { maxWidth: 560 } },
+				React.createElement('p', { style: { ...sub, marginTop: 0, marginBottom: 16 } }, t('sectionDesc')),
+				tokens === null
+					? React.createElement('div', { style: sub }, t('unavailable'))
+					: tokens.length === 0
+						? React.createElement('div', { style: { ...card, padding: '32px 16px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 } },
+							React.createElement('div', { style: title }, t('emptyTitle')),
+							React.createElement('div', { style: sub }, t('emptyDesc')),
+							React.createElement('button', { style: { ...btn, marginTop: 8 }, onClick: () => { void addDevice() } }, t('emptyAction')))
+						: React.createElement('div', null,
+							React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
+								React.createElement('div', { style: title }, t('devices')),
+								React.createElement('button', { style: btn, onClick: () => { void addDevice() } }, t('addDevice'))),
+							React.createElement('div', { style: card },
+								tokens.map((tok, i) => React.createElement(DeviceRow, {
+									key: tok.id, token: tok, port, t, first: i === 0,
+									online: online.includes(tok.id),
+									open: openId === tok.id,
+									onToggle: () => setOpenId(openId === tok.id ? null : tok.id),
+									onRemove: () => { void remove(tok) }
+								})))),
+				failed ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t('failed')) : null
 			)
 		}
 

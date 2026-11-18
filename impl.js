@@ -469,6 +469,7 @@ class NarwalBridge {
 					tokens: this.tokens().length,
 					devices: [...this.devices.values()].map((d) => ({
 						sessionId: d.sessionId,
+						tokenId: d.tokenId ?? null,
 						label: d.label,
 						streams: d.streams.size,
 						connectedAt: d.connectedAt ?? null,
