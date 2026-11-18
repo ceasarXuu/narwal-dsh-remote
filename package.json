@@ -1,6 +1,6 @@
 {
   "name": "narwal-dsh-remote",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Narwal Server: local connection bridge (pairing tokens, QR, mDNS, Narwal Protocol v1 over WebSocket) that lets the Narwal iOS client drive this DSH instance.",
   "type": "module",
   "license": "MIT",
