@@ -44,6 +44,7 @@
     "client.js",
     "impl.js",
     "api-balances.js",
+    "user-questions.js",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",

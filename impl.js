@@ -37,6 +37,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from '
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
+import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
 const TOKEN_ACTIONS = ['create', 'revoke']
@@ -660,7 +661,7 @@ class NarwalBridge {
 
 	disposeStream(device, id, task) {
 		if (!task) return
-		try { task.iterator?.return?.() } catch { /* ended */ }
+		try { task.iterator?.return?.()?.catch?.(() => {}) } catch { /* ended */ }
 		try { task.handle?.dispose?.() } catch { /* nop */ }
 	}
 
@@ -713,12 +714,10 @@ class NarwalBridge {
 			void readApiBalances(this.ctx).then((value) => this.send(device, { id, ok: true, value }))
 			return
 		}
-		void this.deps.invoke({
-			namespace: ns,
-			method,
-			args,
-			peer: device.peer,
-		}).then((value) => {
+		const result = ns === 'narwal' && method === 'answerUserQuestion'
+			? Promise.resolve().then(() => answerUserQuestion(device, args))
+			: this.deps.invoke({ namespace: ns, method, args, peer: device.peer })
+		void result.then((value) => {
 			this.send(device, { id, ok: true, value })
 		}).catch((error) => {
 			this.send(device, {
@@ -744,7 +743,9 @@ class NarwalBridge {
 		}
 		let handle = null
 		try {
-			handle = await this.deps.stream({ namespace: ns, method, args, peer: device.peer })
+			handle = ns === 'narwal' && method === 'userQuestionEvents'
+				? this.deps.openQuestionEvents(device)
+				: await this.deps.stream({ namespace: ns, method, args, peer: device.peer })
 		} catch (error) {
 			this.send(device, {
 				id,
@@ -820,12 +821,14 @@ async function build(ctx, config) {
 	} catch { /* logger unavailable */ }
 	const connection = ctx.connection
 	const gateway = ctx.typertGateway
+	const questionRpc = connection?.createSharedFetchHandler?.('/api')
 	const bridge = new NarwalBridge(ctx, config, {
 		WS: wsMod.WebSocket,
 		WebSocketServer: wsMod.WebSocketServer,
 		createPeer: (o) => connection?.createPeer?.(o) ?? null,
 		invoke: (request) => gateway?.invoke?.(request),
 		stream: (request) => gateway?.stream?.(request),
+		openQuestionEvents: (device) => openQuestionEvents(gateway, questionRpc, device),
 		store,
 	})
 	bridge.start()
