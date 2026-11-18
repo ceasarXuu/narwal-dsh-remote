@@ -36,6 +36,7 @@ import { homedir, hostname, networkInterfaces, userInfo } from 'node:os'
 import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { readApiBalances } from './api-balances.js'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
 const TOKEN_ACTIONS = ['create', 'revoke']
@@ -701,6 +702,15 @@ class NarwalBridge {
 		const args = (request?.args && typeof request.args === 'object') ? request.args : {}
 		if (request?.stream === true) {
 			void this.runStream(device, id, ns, method, args)
+			return
+		}
+		if (ns === 'narwal' && method === 'getApiBalances') {
+			// Relay tickets do not establish the phone's paired identity on the desktop.
+			if (!device.peer || device.socket === this.relay?.socket) {
+				this.send(device, { id, ok: true, value: { status: 'unsupported' } })
+				return
+			}
+			void readApiBalances(this.ctx).then((value) => this.send(device, { id, ok: true, value }))
 			return
 		}
 		void this.deps.invoke({

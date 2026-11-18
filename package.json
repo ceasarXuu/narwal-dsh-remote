@@ -26,6 +26,14 @@
     "registry": "https://registry.npmjs.org",
     "provenance": false
   },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm-deepseek": "*",
+    "@deepseek-ai/dsh-llm-deepseek-api-key": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm-deepseek": { "optional": true },
+    "@deepseek-ai/dsh-llm-deepseek-api-key": { "optional": true }
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -35,6 +43,7 @@
     "index.js",
     "client.js",
     "impl.js",
+    "api-balances.js",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
