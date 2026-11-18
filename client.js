@@ -27,7 +27,14 @@ window.__ModuleLoader__.load({
 			deviceName: 'device',
 			rename: 'Rename',
 			unavailable: 'Narwal service is starting up…',
-			failed: 'Operation failed'
+			failed: 'Operation failed',
+			trafficTitle: 'Traffic usage',
+			trafficRange: 'Last 30 days · desktop to phone',
+			trafficWifi: 'Wi-Fi',
+			trafficRelay: 'Relay',
+			trafficUnavailable: 'Traffic usage is unavailable.',
+			trafficDetails: 'Daily breakdown',
+			trafficDate: 'Date',
 		}
 		const zh = {
 			nav: 'Narwal',
@@ -47,7 +54,14 @@ window.__ModuleLoader__.load({
 			deviceName: 'device',
 			rename: '重命名',
 			unavailable: 'Narwal 服务正在启动…',
-			failed: '操作失败'
+			failed: '操作失败',
+			trafficTitle: '流量统计',
+			trafficRange: '最近 30 天 · 桌面发送到手机',
+			trafficWifi: 'Wi-Fi 直连',
+			trafficRelay: 'Relay 中转',
+			trafficUnavailable: '暂时无法读取流量数据。',
+			trafficDetails: '按日明细',
+			trafficDate: '日期',
 		}
 
 		/* ------------------------------------------------------------------ */
@@ -59,6 +73,16 @@ window.__ModuleLoader__.load({
 		const btn = { padding: '5px 12px', fontSize: 12, cursor: 'pointer', borderRadius: 6, border: '1px solid var(--dsw-alias-border-l2, #ccc)', background: 'transparent', color: 'inherit' }
 		const btnDanger = { ...btn, color: '#e5484d' }
 		const card = { border, borderRadius: 10, overflow: 'hidden' }
+		const wifiColor = '#5785df'
+		const relayColor = '#3a9e80'
+		const trafficNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 })
+
+		function formatMegabytes(bytes) {
+			const megabytes = bytes / 1_000_000
+			return megabytes > 0 && megabytes < 0.01
+				? `<${trafficNumber.format(0.01)} MB`
+				: `${trafficNumber.format(megabytes)} MB`
+		}
 
 		/* ------------------------------------------------------------------ */
 		/* components                                                          */
@@ -109,6 +133,59 @@ window.__ModuleLoader__.load({
 				open ? React.createElement(QrBlock, { token, port, t }) : null)
 		}
 
+		function TrafficSummary({ label, color, bytes }) {
+			return React.createElement('div', { style: { minWidth: 0 } },
+				React.createElement('div', { style: { ...sub, display: 'flex', alignItems: 'center', gap: 6 } },
+					React.createElement('span', { 'aria-hidden': true, style: { width: 7, height: 7, borderRadius: 4, background: color } }), label),
+				React.createElement('div', { style: { fontSize: 20, marginTop: 3, fontWeight: 600, fontVariantNumeric: 'tabular-nums' } }, formatMegabytes(bytes)))
+		}
+
+		function TrafficChart({ days, wifiLabel, relayLabel }) {
+			const max = Math.max(1, ...days.map(day => day.wifiBytes + day.relayBytes))
+			return React.createElement('div', { 'aria-hidden': true, style: { marginTop: 16 } },
+				React.createElement('div', { style: { display: 'flex', height: 50, gap: 3, borderBottom: border } },
+					days.map(day => React.createElement('div', {
+						key: day.date, title: `${day.date}\n${wifiLabel} ${formatMegabytes(day.wifiBytes)}\n${relayLabel} ${formatMegabytes(day.relayBytes)}`,
+						style: { display: 'flex', flexDirection: 'column-reverse', flex: 1, borderRadius: '2px 2px 0 0', overflow: 'hidden', alignSelf: 'end', height: (day.wifiBytes + day.relayBytes) / max * 100 + '%' },
+					},
+					React.createElement('span', { style: { flex: day.wifiBytes, backgroundColor: wifiColor } }),
+					React.createElement('span', { style: { flex: day.relayBytes, backgroundColor: relayColor } })))),
+				React.createElement('div', { style: { ...sub, display: 'flex', justifyContent: 'space-between', marginTop: 4 } },
+					days[0].date.slice(5), days.at(-1).date.slice(5)))
+		}
+
+		function TrafficSection({ traffic, t }) {
+			const days = traffic?.days
+			const wifiLabel = t('trafficWifi')
+			const relayLabel = t('trafficRelay')
+			const heading = React.createElement('div', { style: title }, t('trafficTitle'))
+			const range = React.createElement('div', { style: { ...sub, margin: '3px 0 10px' } }, t('trafficRange'))
+			const content = Array.isArray(days) && days.length
+				? React.createElement('div', { style: { ...card, padding: 16 } },
+					React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 16 } },
+						React.createElement(TrafficSummary, { label: wifiLabel, color: wifiColor, bytes: days.reduce((sum, day) => sum + day.wifiBytes, 0) }),
+						React.createElement(TrafficSummary, { label: relayLabel, color: relayColor, bytes: days.reduce((sum, day) => sum + day.relayBytes, 0) })),
+					React.createElement(TrafficChart, { days, wifiLabel, relayLabel }),
+					React.createElement(TrafficDetails, { days, columnLabels: [t('trafficDate'), wifiLabel, relayLabel], label: t('trafficDetails') }))
+				: React.createElement('div', { style: { ...card, ...sub, padding: 16 } }, t('trafficUnavailable'))
+			return React.createElement('section', { style: { marginTop: 24 }, 'aria-label': t('trafficTitle') }, heading, range, content)
+		}
+
+		function TrafficDetails({ days, columnLabels, label }) {
+			const cell = { textAlign: 'start', padding: '6px 4px', borderBottom: border, fontWeight: 'inherit' }
+			const columns = columnLabels.map(text => React.createElement('th', { key: text, scope: 'col', style: cell }, text))
+			const rows = [...days].reverse().map(day => React.createElement('tr', { key: day.date },
+				React.createElement('th', { scope: 'row', style: cell }, day.date),
+				React.createElement('td', { style: cell }, formatMegabytes(day.wifiBytes)),
+				React.createElement('td', { style: cell }, formatMegabytes(day.relayBytes))))
+			return React.createElement('details', { style: { ...sub, marginTop: 12 } },
+				React.createElement('summary', { style: { cursor: 'pointer' } }, label),
+				React.createElement('div', { style: { maxHeight: 256, overflowY: 'auto', marginTop: 8 } },
+					React.createElement('table', { style: { borderCollapse: 'collapse', width: '100%', fontVariantNumeric: 'tabular-nums' } },
+						React.createElement('thead', null, React.createElement('tr', null, columns)),
+						React.createElement('tbody', null, rows))))
+		}
+
 		/*
 		 * 渲染错误边界。设置面板一旦抛错，整个 slot 会渲染成空白 ——
 		 * 之前 hooks 漏解构就是这么白屏的，日志里什么都看不到。
@@ -138,6 +215,7 @@ window.__ModuleLoader__.load({
 			const port = Number(snapshot?.value?.port) || 48317
 			const [tokens, setTokens] = useState(null)
 			const [online, setOnline] = useState([])
+			const [traffic, setTraffic] = useState(null)
 			const [openId, setOpenId] = useState(null)
 			const [failed, setFailed] = useState(false)
 			const stopRef = useRef(false)
@@ -154,10 +232,13 @@ window.__ModuleLoader__.load({
 					secretRef.current = list[0]?.secret ?? ''
 					if (stopRef.current) return
 					setTokens(list)
-					if (!list.length) { setOnline([]); return }
-					const stats = await fetch(`${base}/stats?token=${encodeURIComponent(secretRef.current)}`)
+					const statsQuery = secretRef.current ? `?token=${encodeURIComponent(secretRef.current)}` : ''
+					const stats = await fetch(`${base}/stats${statsQuery}`)
 					const info = stats.ok ? await stats.json() : null
-					if (!stopRef.current) setOnline(Array.isArray(info?.devices) ? info.devices.map((d) => d.tokenId) : [])
+					if (!stopRef.current) {
+						setOnline(Array.isArray(info?.devices) ? info.devices.map((d) => d.tokenId) : [])
+						setTraffic(info?.traffic ?? null)
+					}
 				} catch {
 					if (!stopRef.current) setTokens(null)
 				}
@@ -232,7 +313,8 @@ window.__ModuleLoader__.load({
 									onRemove: () => { void remove(tok) },
 					onRename: (id, label) => { void rename(id, label) }
 								})))),
-				failed ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t('failed')) : null
+				failed ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t('failed')) : null,
+				React.createElement(TrafficSection, { traffic, t })
 			)
 		}
 

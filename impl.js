@@ -37,6 +37,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from '
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
+import { TrafficUsage } from './traffic-usage.js'
 import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
@@ -239,6 +240,7 @@ class NarwalBridge {
 		this.deps = deps
 		this.store = deps.store
 		this.log = ctx.logger('narwal-server')
+		this.traffic = new TrafficUsage(this.store.dir, this.log)
 		this.devices = new Map()
 	}
 
@@ -348,6 +350,7 @@ class NarwalBridge {
 		for (const device of [...this.devices.values()]) this.teardown(device)
 		this.devices.clear()
 		try { this.server?.close() } catch { /* nop */ }
+		this.traffic.close()
 		this.log.info('bridge stopped; devices disposed')
 	}
 
@@ -467,6 +470,7 @@ class NarwalBridge {
 					port: Number(this.config?.port) || 48317,
 					advertiseName: this.hostLabel(),
 					tokens: this.tokens().length,
+					traffic: this.traffic.snapshot(),
 					devices: [...this.devices.values()].map((d) => ({
 						sessionId: d.sessionId,
 						tokenId: d.tokenId ?? null,
@@ -666,10 +670,15 @@ class NarwalBridge {
 		try { task.handle?.dispose?.() } catch { /* nop */ }
 	}
 
-	send(device, frame) {
+	send(device, frame, meter = true) {
 		if (device.disposed) return
 		try {
-			device.socket.send(JSON.stringify(frame))
+			const payload = JSON.stringify(frame)
+			const transport = device.socket === this.relay?.socket ? 'relay' : 'wifi'
+			const bytes = meter ? Buffer.byteLength(payload) : 0
+			device.socket.send(payload, error => {
+				if (!error && bytes) this.traffic.record(transport, bytes)
+			})
 		} catch { /* closing */ }
 	}
 
@@ -704,6 +713,10 @@ class NarwalBridge {
 		const args = (request?.args && typeof request.args === 'object') ? request.args : {}
 		if (request?.stream === true) {
 			void this.runStream(device, id, ns, method, args)
+			return
+		}
+		if (ns === 'narwal' && method === 'getTrafficUsage') {
+			this.send(device, { id, ok: true, value: this.traffic.snapshot() }, false)
 			return
 		}
 		if (ns === 'narwal' && method === 'getApiBalances') {
