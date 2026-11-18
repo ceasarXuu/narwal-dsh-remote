@@ -24,7 +24,8 @@ window.__ModuleLoader__.load({
 			scanHint: 'Open Narwal on your phone and scan this code.',
 			remove: 'Remove',
 			removeConfirm: 'Remove this device? It will be disconnected and must be paired again.',
-			deviceName: 'iPhone',
+			deviceName: 'device',
+			rename: 'Rename',
 			unavailable: 'Narwal service is starting up…',
 			failed: 'Operation failed'
 		}
@@ -43,7 +44,8 @@ window.__ModuleLoader__.load({
 			scanHint: '打开手机上的 Narwal，扫描此二维码。',
 			remove: '移除',
 			removeConfirm: '移除该设备？它会被断开，需要重新配对。',
-			deviceName: 'iPhone',
+			deviceName: 'device',
+			rename: '重命名',
 			unavailable: 'Narwal 服务正在启动…',
 			failed: '操作失败'
 		}
@@ -72,13 +74,35 @@ window.__ModuleLoader__.load({
 				React.createElement('div', { style: sub }, t('scanHint')))
 		}
 
+		function DeviceName(props) {
+			const { token, t, onRename } = props
+			const [draft, setDraft] = useState(null)
+			const name = token.label || token.id
+			const commit = () => {
+				const next = (draft ?? '').trim()
+				setDraft(null)
+				if (next && next !== name) onRename(token.id, next)
+			}
+			if (draft !== null) {
+				return React.createElement('input', {
+					autoFocus: true, value: draft, maxLength: 24,
+					style: { ...title, width: '100%', boxSizing: 'border-box', padding: '1px 6px', margin: '-2px -7px', border: '1px solid var(--dsw-alias-border-l2, #ccc)', borderRadius: 6, background: 'transparent', color: 'inherit', outline: 'none' },
+					onChange: (e) => setDraft(e.target.value),
+					onBlur: commit,
+					onKeyDown: (e) => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') setDraft(null) }
+				})
+			}
+			return React.createElement('div', { style: { ...title, cursor: 'text', display: 'inline-flex', alignItems: 'center', gap: 6 }, title: t('rename'), onClick: () => setDraft(name) },
+				name, React.createElement('span', { style: { ...sub, fontWeight: 400 } }, '\u270E'))
+		}
+
 		function DeviceRow(props) {
-			const { token, online, open, first, port, t, onToggle, onRemove } = props
+			const { token, online, open, first, port, t, onToggle, onRemove, onRename } = props
 			return React.createElement('div', { style: first ? null : { borderTop: border } },
 				React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' } },
 					React.createElement('span', { style: { width: 8, height: 8, borderRadius: 4, flex: 'none', background: online ? '#2f9e5e' : '#c4c4c4' } }),
 					React.createElement('div', { style: { flex: 1, minWidth: 0 } },
-						React.createElement('div', { style: title }, token.label || token.id),
+						React.createElement(DeviceName, { token, t, onRename }),
 						React.createElement('div', { style: sub }, online ? t('online') : t('offline'))),
 					React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')),
 					React.createElement('button', { style: btnDanger, onClick: onRemove }, t('remove'))),
@@ -165,11 +189,18 @@ window.__ModuleLoader__.load({
 			}, [base])
 
 			const addDevice = async () => {
-				const created = await post({ action: 'create', label: `${t('deviceName')} ${(tokens?.length ?? 0) + 1}` })
+				const used = new Set((tokens ?? []).map((x) => x.label))
+				let n = 1
+				while (used.has(`${t('deviceName')}(${n})`)) n += 1
+				const created = await post({ action: 'create', label: `${t('deviceName')}(${n})` })
 				if (created?.id) {
 					if (created.secret && !secretRef.current) secretRef.current = created.secret
 					setOpenId(created.id)
 				}
+				await refresh()
+			}
+			const rename = async (id, label) => {
+				await post({ action: 'relabel', id, label })
 				await refresh()
 			}
 			const remove = async (token) => {
@@ -198,7 +229,8 @@ window.__ModuleLoader__.load({
 									online: online.includes(tok.id),
 									open: openId === tok.id,
 									onToggle: () => setOpenId(openId === tok.id ? null : tok.id),
-									onRemove: () => { void remove(tok) }
+									onRemove: () => { void remove(tok) },
+					onRename: (id, label) => { void rename(id, label) }
 								})))),
 				failed ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t('failed')) : null
 			)
