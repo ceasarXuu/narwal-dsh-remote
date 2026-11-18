@@ -43,6 +43,7 @@
     "index.js",
     "client.js",
     "impl.js",
+    "token-store.js",
     "api-balances.js",
     "traffic-usage.js",
     "user-questions.js",

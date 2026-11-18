@@ -33,10 +33,10 @@ const VERSION = (() => {
 	}
 })()
 import { homedir, hostname, networkInterfaces, userInfo } from 'node:os'
-import { mkdirSync, existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
+import { TokenStore } from './token-store.js'
 import { TrafficUsage } from './traffic-usage.js'
 import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
 
@@ -68,90 +68,6 @@ function autoLanIp() {
 		}
 	} catch { /* frozen env */ }
 	return null
-}
-
-class TokenStore {
-	constructor(home, configTokens) {
-		/*
-		 * 令牌落在哪个 home：
-		 * 1. DSH_HOME（宿主显式提供时最权威）
-		 * 2. 进程 cwd —— 桌面端未注入 DSH_HOME，cwd 即 profiles/<name>，
-		 *    正好实现「每个 profile 独立令牌」的语义
-		 * 3. os.homedir()/.dsh 兜底
-		 */
-		const explicit = home && home.length > 3 ? home : null
-		const fallback = process.cwd()
-		const base = explicit ?? fallback
-		this.dir = join(base, 'narwal-server')
-		this.file = join(this.dir, 'tokens.json')
-		this.base = base
-		this.memory = []
-		try {
-			this.load()
-		} catch { this.memory = [] }
-		for (const t of (Array.isArray(configTokens) ? configTokens : [])) {
-			if (t && typeof t === 'object' && typeof t.secret === 'string' && !this.memory.some((x) => x.secret === t.secret)) {
-				this.memory.push({ id: t.id ?? `nt_${Date.now().toString(36)}`, label: t.label ?? '', createdAt: t.createdAt ?? new Date().toISOString(), secret: t.secret })
-			}
-		}
-	}
-
-	static secret() {
-		const bytes = new Uint8Array(24)
-		;((globalThis.crypto ?? { getRandomValues: (b) => b }).getRandomValues)(bytes)
-		return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-	}
-
-	static id() {
-		return `nt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-	}
-
-	load() {
-		if (!existsSync(this.file)) {
-			this.memory = []
-			return
-		}
-		const parsed = JSON.parse(readFileSync(this.file, 'utf8'))
-		this.memory = Array.isArray(parsed?.tokens) ? parsed.tokens.filter((t) => t && typeof t.secret === 'string') : []
-	}
-
-	save() {
-		try {
-			mkdirSync(this.dir, { recursive: true })
-			const tmp = `${this.file}.tmp`
-			writeFileSync(tmp, JSON.stringify({ tokens: this.memory, updatedAt: new Date().toISOString() }, null, 1), 'utf8')
-			renameSync(tmp, this.file)
-		} catch { /* 权限不足时令牌仍在内存,重启丢失 */ }
-	}
-
-	list() {
-		return this.memory
-	}
-
-	create(label) {
-		const token = {
-			id: TokenStore.id(),
-			label: (typeof label === 'string' && label.trim()) || `device-${this.memory.length + 1}`,
-			createdAt: new Date().toISOString(),
-			secret: TokenStore.secret(),
-		}
-		this.memory = [...this.memory, token]
-		this.save()
-		return token
-	}
-
-	revoke(id) {
-		this.memory = this.memory.filter((t) => t.id !== id)
-		this.save()
-	}
-
-	relabel(id, label) {
-		const t = this.memory.find((x) => x.id === id)
-		if (!t) return null
-		t.label = String(label ?? '').trim() || t.label
-		this.save()
-		return t
-	}
 }
 
 function streamLog(ctx, event, details) {
