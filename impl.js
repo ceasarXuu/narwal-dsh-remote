@@ -23,70 +23,18 @@
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { createServer, STATUS_CODES } from 'node:http'
-import { createRequire } from 'node:module'
-
-const requirePkg = createRequire(import.meta.url)
-const VERSION = (() => {
-	try {
-		return requirePkg('./package.json').version
-	} catch {
-		return 'unknown'
-	}
-})()
-import { homedir, hostname, networkInterfaces, userInfo } from 'node:os'
+import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { readApiBalances } from './api-balances.js'
-import { readGitHubProjects } from './github-projects.js'
+import { handlePanelRequest } from './bridge-panel.js'
+import { handleDeviceFrame } from './bridge-rpc.js'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
-import { MAX_PAIRINGS, TokenStore } from './token-store.js?device-pairing'
+import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
-import { answerUserQuestion, openQuestionEvents, watchPendingQuestions } from './user-questions.js?passive-notices'
+import { openQuestionEvents, watchPendingQuestions } from './user-questions.js?passive-notices'
 
-const TRACE = process.env.NARWAL_TRACE === '1'
-const TOKEN_ACTIONS = ['create', 'revoke']
 const SESSION_EVENTS = ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']
-
-function panelToken(token) {
-	if (!token) return null
-	const { deviceId, ...visible } = token
-	return visible
-}
-
-/** 扁平位矩阵 → 方格 SVG(黑模块白底);手机相机可读。 */
-function renderQrSvg(data, size) {
-	const one = 8
-	const pad = 16
-	const total = size * one + pad * 2
-	let rects = ''
-	for (let y = 0; y < size; y++) {
-		for (let x = 0; x < size; x++) {
-			if (data[y * size + x]) rects += `<rect x="${pad + x * one}" y="${pad + y * one}" width="${one}" height="${one}"/>`
-		}
-	}
-	return `<svg xmlns="http://www.w3.org/2000/svg" width="${total}" height="${total}" viewBox="0 0 ${total} ${total}">` +
-		`<rect width="${total}" height="${total}" fill="#ffffff"/><g fill="#000000">${rects}</g></svg>`
-}
-
-/** 首个非环回 IPv4 —— QR 载荷里的手机可达 host。 */
-function autoLanIp() {
-	try {
-		for (const nets of Object.values(networkInterfaces())) {
-			for (const net of nets ?? []) {
-				if (net.family === 'IPv4' && !net.internal) return net.address
-			}
-		}
-	} catch { /* frozen env */ }
-	return null
-}
-
-function streamLog(ctx, event, details) {
-	try {
-		const line = `${new Date().toISOString()} STREAM ${event} :: ${JSON.stringify(details)}\n`
-		import('node:fs').then((fs) => fs.appendFileSync('/tmp/narwal-stream.log', line)).catch(() => {})
-	} catch { }
-}
 
 /**
  * 桌面端账户信息:macOS 全名 + 系统头像。
@@ -124,39 +72,6 @@ function readDesktopAccount() {
 	} catch {
 		return { name: 'desktop', user: '', avatar: null }
 	}
-}
-
-/** 只有本机回环才允许「首次创建令牌」的引导路径。 */
-function isLoopback(addr) {
-	return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
-}
-
-/**
- * 本机面板是否可信。
- *
- * 设置面板跑在 DSH 自己的渲染进程里，它需要读/写令牌列表 —— 但没有令牌时
- * 拿不到 secret，会形成死锁（创建按钮点了没反应）。所以对 loopback 请求放行，
- * 但要求 Origin 必须是 DSH 自己：
- *   - dsh-app://…（Electron 渲染进程）
- *   - http://127.0.0.1:<port> / http://localhost:<port>（浏览器打开同一 GUI）
- *   - 无 Origin（curl、本机脚本）
- * 其它 Origin（例如本机浏览器里的第三方网页）一律拒绝，避免 CSRF。
- */
-function isTrustedLocal(req) {
-	if (!isLoopback(req.socket?.remoteAddress ?? '')) return false
-	const origin = String(req.headers?.origin ?? '')
-	if (!origin) return true
-	if (/^dsh-app:\/\//.test(origin)) return true
-	if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) return true
-	return false
-}
-
-function auditLine(ctx, event, details) {
-	try {
-		const line = `${new Date().toISOString()} AUDIT ${event} :: ${JSON.stringify(details ?? {})}\n`
-		import('node:fs').then((fs) => fs.appendFileSync('/tmp/narwal-audit.log', line)).catch(() => {})
-		ctx.logger('narwal-server.audit').info('%s :: %o', event, details ?? {})
-	} catch { /* logger missing in test harness */ }
 }
 
 class NarwalBridge {
@@ -238,7 +153,7 @@ class NarwalBridge {
 
 	async start() {
 		this.server = createServer((req, res) => {
-			void this.handlePlain(req, res)
+			void handlePanelRequest(this, req, res)
 		})
 		this.server.on('error', (err) => this.log.warn('bridge http error: %s', err?.message))
 
@@ -380,198 +295,6 @@ class NarwalBridge {
 		socket.destroy()
 	}
 
-	async handlePlain(req, res) {
-		if (this.stopping) {
-			res.writeHead(503).end()
-			return
-		}
-		/* CORS:面板跨端口号取路由;只接受同机 loopback 源 */
-		const origin = req.headers.origin
-		const corsHeaders = {}
-		const originAllowed = typeof origin === 'string' && (
-			/^http:\/\/(127\.0\.0\.1|\[::1\]|localhost):(\d{1,5})$/.test(origin) ||
-			/^dsh-app:\/\/[^/]*$/.test(origin)
-		)
-		if (originAllowed) {
-			corsHeaders['access-control-allow-origin'] = origin
-			corsHeaders['access-control-allow-methods'] = 'GET,POST,OPTIONS'
-			corsHeaders['access-control-allow-headers'] = 'content-type'
-			corsHeaders['vary'] = 'origin'
-		}
-		if (req.method === 'OPTIONS') {
-			res.writeHead(204, corsHeaders)
-			res.end()
-			return
-		}
-		let url
-		try {
-			url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-		} catch {
-			res.writeHead(400).end()
-			return
-		}
-		const allowed = req.method === 'GET' ? ['/qr.svg', '/stats', '/tokens', '/relay-status'] : req.method === 'POST' ? ['/tokens', '/devices', '/reload'] : []
-		if (!allowed.includes(url.pathname)) {
-			res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-			res.end('narwal server: /ws (socket), /qr.svg + /stats + /tokens (HTTP)\n')
-			return
-		}
-		let matched = this.findToken(url.searchParams.get('token') ?? '')
-		const isPairingProbe = url.pathname === '/stats' && url.searchParams.has('deviceId')
-		if (!matched && !isPairingProbe && url.pathname !== '/qr.svg' && isTrustedLocal(req)) {
-			/* 本机面板：可信，但仍记录一次审计 */
-			matched = { id: 'local-panel', label: 'local-panel', secret: '' }
-			auditLine(this.ctx, 'panel/local-access', { path: url.pathname, at: Date.now() })
-		}
-		if (!matched) {
-			res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
-			res.end('invalid token\n')
-			return
-		}
-		if (isPairingProbe) {
-			const deviceError = this.store.checkDevice(matched, url.searchParams.get('deviceId'))
-			if (deviceError) this.replyJson(res, corsHeaders, { ok: false, error: deviceError }, 403)
-			else this.replyJson(res, corsHeaders, { ok: true })
-			return
-		}
-		try {
-			if (url.pathname === '/relay-status') {
-				const relay = this.relay
-				const state = !relay
-					? 'off'
-					: relay.closed
-						? 'off'
-						: relay.socket
-							? 'connected'
-							: `retrying (${relay.attempts})`
-				this.replyJson(res, corsHeaders, {
-					enabled: Boolean(this.config?.relay?.enabled),
-					url: String(this.config?.relay?.url || '').replace(/^[a-z]+:\/\//, ''),
-					hasTicket: Boolean(String(this.config?.relay?.ticket || '').trim()),
-					state,
-				})
-				return
-			}
-			if (url.pathname === '/stats') {
-				this.replyJson(res, corsHeaders, {
-					version: VERSION,
-					pairHost: this.pairHost(),
-					port: Number(this.config?.port) || 48317,
-					advertiseName: this.hostLabel(),
-					tokens: this.store.list().length,
-					traffic: this.traffic.snapshot(),
-					devices: [...this.devices.values()].map((d) => ({
-						sessionId: d.sessionId,
-						tokenId: d.tokenId ?? null,
-						label: d.label,
-						streams: d.streams.size,
-						connectedAt: d.connectedAt ?? null,
-					})),
-				})
-				return
-			}
-			if (url.pathname === '/reload' && req.method === 'POST') {
-				auditLine(this.ctx, 'bridge/reload', { byToken: matched.id, at: Date.now() })
-			this.replyJson(res, corsHeaders, { ok: true, action: 'reloadscheduled' })
-				/* 给 res 写完瞬息再重建(自桥替换:关闭 + 新建覆盖同一端口) */
-				setTimeout(() => {
-					if (!this.stopping && typeof this.onReloadRequest === 'function') {
-						try { this.disposeAll() } catch { }
-						if (typeof this.reuseBuildRef === 'function') this.reuseBuildRef()
-					}
-				}, 200)
-				return
-			}
-			if (url.pathname === '/devices' && req.method === 'POST') {
-				let body = {}
-				try {
-					body = JSON.parse(await this.readBody(req))
-				} catch { body = {} }
-				if (this.stopping || res.destroyed) return
-				if (typeof body?.sessionId === 'string') {
-					const device = this.devices.get(body.sessionId)
-					if (!device) {
-						this.replyJson(res, corsHeaders, { ok: false, error: 'no such device' })
-						return
-					}
-					auditLine(this.ctx, 'device/kick', { sessionId: device.sessionId, label: device.label, byToken: matched.id, at: Date.now() })
-					this.teardown(device)
-					this.devices.delete(device.sessionId)
-					this.log.info('device %s (%s) kicked by panel', device.sessionId, device.label)
-					this.replyJson(res, corsHeaders, { ok: true })
-					return
-				}
-				res.writeHead(400, corsHeaders)
-				res.end()
-				return
-			}
-			if (url.pathname === '/tokens') {
-				if (req.method === 'GET') {
-					this.replyJson(res, corsHeaders, {
-						pairHost: this.pairHost(),
-						tokens: this.store.list().map(panelToken),
-						maxPairings: MAX_PAIRINGS,
-					})
-					return
-				}
-				let body
-				try {
-					body = JSON.parse(await this.readBody(req))
-				} catch {
-					body = {}
-				}
-				if (this.stopping || res.destroyed) return
-				if (body?.action === 'create') {
-					const token = this.store.create(body?.label)
-					if (!token) {
-						this.replyJson(res, corsHeaders, { ok: false, error: 'pairing-limit' }, 409)
-						return
-					}
-					auditLine(this.ctx, 'token/create', { id: token.id, label: token.label, byToken: matched.id, at: Date.now() })
-					this.replyJson(res, corsHeaders, token)
-					return
-				}
-				if (body?.action === 'relabel' && typeof body?.id === 'string') {
-					auditLine(this.ctx, 'token/relabel', { id: body.id, next: String(body?.label ?? '').slice(0, 24), byToken: matched.id, at: Date.now() })
-					const updated = this.store.relabel?.(body.id, body?.label) ?? null
-					this.replyJson(res, corsHeaders, { ok: true, token: panelToken(updated) })
-					return
-				}
-				if (body?.action === 'revoke' && typeof body?.id === 'string') {
-					auditLine(this.ctx, 'token/revoke', { id: body.id, byToken: matched.id, at: Date.now() })
-					this.store.revoke?.(body.id)
-					this.killDevicesByTokenId(body.id, 'token revoked')
-					this.replyJson(res, corsHeaders, { ok: true })
-					return
-				}
-				res.writeHead(400, corsHeaders)
-				res.end()
-				return
-			}
-			/* /qr.svg */
-			const { toQR } = await this.loadToqr()
-			if (this.stopping || res.destroyed) return
-			const host = this.pairHost()
-			const port = Number(this.config?.port) || 48317
-			const name = this.hostLabel()
-			const params = new URLSearchParams({ v: '1', host, port: String(port), token: matched.secret, name })
-			const desktopId = this.store.getDesktopId()
-			if (desktopId) params.set('desktopId', desktopId)
-			const payload = `narwal://pair?${params}`
-			const data = toQR(payload, 1)
-			const size = Math.round(Math.sqrt(data.length)) || 0
-			res.writeHead(200, {
-				'content-type': 'image/svg+xml; charset=utf-8',
-				'cache-control': 'no-store',
-				'x-content-type-options': 'nosniff',
-			})
-			res.end(renderQrSvg(data, size))
-		} catch (error) {
-			this.log.warn('http %s failed: %s', url.pathname, error?.message ?? String(error))
-			res.writeHead(500).end()
-		}
-	}
-
 	/** 让已连接的设备感知吊销:立即踢线;其自动重连将因 401 拒绝而停止。 */
 	killDevicesByTokenId(tokenId, reason) {
 		for (const device of [...this.devices.values()]) {
@@ -583,41 +306,8 @@ class NarwalBridge {
 		}
 	}
 
-	replyJson(res, extra, body, status = 200) {
-		res.writeHead(status, { ...extra, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-		res.end(JSON.stringify(body))
-	}
-
-	readBody(req) {
-		return new Promise((resolve, reject) => {
-			const chunks = []
-			req.on('data', (c) => chunks.push(c))
-			req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
-			req.on('error', reject)
-		})
-	}
-
-	loadToqr() {
-		this.toqrp ||= import('./vendor/toqr.mjs').catch(async () => {
-			const argv1 = process.argv[1] ?? ''
-			const cutAt = argv1.indexOf('/node_modules/')
-			if (cutAt > 0) {
-				try {
-					return await import(`file://${argv1.slice(0, cutAt)}/node_modules/toqr/dist/toqr.mjs`)
-				} catch { /* nop */ }
-			}
-			throw new Error('toqr unavailable')
-		})
-		return this.toqrp
-	}
-
 	hostLabel() {
 		return this.config?.advertiseName ?? 'narwal'
-	}
-
-	pairHost() {
-		const lan = String(this.config?.lanHost ?? '').trim()
-		return lan || autoLanIp() || this.hostLabel()
 	}
 
 	async attach(ws, tokenRecord, active = true) {
@@ -637,7 +327,7 @@ class NarwalBridge {
 		this.devices.set(sessionId, device)
 		this.refreshQuestionWatcher()
 
-		ws.on('message', (buf) => this.onFrame(device, buf.toString('utf8')))
+		ws.on('message', (buf) => handleDeviceFrame(this, device, buf.toString('utf8')))
 		ws.on('close', () => {
 			if (this.devices.get(sessionId) === device) {
 				this.teardown(device)
@@ -703,177 +393,6 @@ class NarwalBridge {
 			})
 		} catch { /* closing */ }
 	}
-
-	onFrame(device, text) {
-		let request
-		try {
-			request = JSON.parse(text)
-		} catch {
-			this.send(device, { event: 'narwal/protocol', payload: 'frame is not JSON' })
-			return
-		}
-		const id = typeof request?.id === 'string' ? request.id : ''
-		if (request?.unsubscribe === true && id) {
-			if (!device.active) return
-			streamLog(this.ctx, 'unsub', { sessionId: device.sessionId, id })
-			const task = device.streams.get(id)
-			if (task) {
-				device.streams.delete(id)
-				this.disposeStream(device, id, task)
-				this.send(device, { id, done: true })
-			} else if (/^s|^i/.test(id) && typeof request?.id === 'string' && device.pendingUnsub.add(id)) {
-				/* runStream 的 subscribe 若在展开中:未登记完成也提前记录,以免泄漏 */
-				this.send(device, { id, done: true })
-			}
-			return
-		}
-		const ns = typeof request?.ns === 'string' ? request.ns : ''
-		const method = typeof request?.method === 'string' ? request.method : ''
-		if (!id || !ns || !method) {
-			this.send(device, { event: 'narwal/protocol', payload: 'id/ns/method required' })
-			return
-		}
-		const args = (request?.args && typeof request.args === 'object') ? request.args : {}
-		if (ns === 'narwal' && method === 'setActive' && request?.stream !== true) {
-			this.setDeviceActive(device, id, args.active)
-			return
-		}
-		if (!device.active) {
-			this.send(device, { id, ok: false, error: { code: 'narwal/device-inactive', message: 'Desktop is not selected' } })
-			return
-		}
-		const revision = device.activityRevision
-		const sendResult = frame => {
-			if (device.activityRevision === revision) this.send(device, frame)
-		}
-		if (request?.stream === true) {
-			void this.runStream(device, id, ns, method, args, revision)
-			return
-		}
-		if (ns === 'narwal' && method === 'getTrafficUsage') {
-			this.send(device, { id, ok: true, value: this.traffic.snapshot() }, false)
-			return
-		}
-		if (ns === 'narwal' && method === 'getApiBalances') {
-			// Relay tickets do not establish the phone's paired identity on the desktop.
-			if (!device.peer || device.socket === this.relay?.socket) {
-				this.send(device, { id, ok: true, value: { status: 'unsupported' } })
-				return
-			}
-			void readApiBalances(this.ctx).then((value) => sendResult({ id, ok: true, value }))
-			return
-		}
-		if (ns === 'narwal' && ['getGitHubProjects', 'installGitHubProjects', 'enableGitHubProjects'].includes(method)) {
-			const reply = (value) => sendResult({ id, ok: true, value })
-			if (!device.peer || device.tokenId === 'relay') {
-				reply({ kind: 'unavailable' })
-				return
-			}
-			const installer = this.deps.githubProjectsInstaller
-			if (method !== 'getGitHubProjects') {
-				reply(installer.start(method === 'installGitHubProjects' ? 'install' : 'enable'))
-				return
-			}
-			void readGitHubProjects(this.ctx.get('webServer'), installer, args).then(reply).catch((error) => {
-				sendResult({ id, ok: false, error: { code: error.code, message: error.message, details: error.details } })
-			})
-			return
-		}
-		const result = ns === 'narwal' && method === 'answerUserQuestion'
-			? Promise.resolve().then(() => answerUserQuestion(device, args))
-			: this.deps.invoke({ namespace: ns, method, args, peer: device.peer })
-		void result.then((value) => {
-			sendResult({ id, ok: true, value })
-		}).catch((error) => {
-			sendResult({
-				id,
-				ok: false,
-				error: {
-					code: error?.code ?? 'narwal/bridge',
-					message: error?.message ?? String(error),
-					details: error?.details ?? {},
-				},
-			})
-		})
-	}
-
-	async runStream(device, id, ns, method, args, revision) {
-		if (typeof this.deps?.stream !== 'function') {
-			this.send(device, { id, ok: false, error: { code: 'narwal/bridge', message: 'stream() bridge not wired' } })
-			return
-		}
-		if (device.streams.has(id)) {
-			this.send(device, { id, ok: false, error: { code: 'narwal/protocol', message: 'duplicate stream id' } })
-			return
-		}
-		let handle = null
-		try {
-			handle = ns === 'narwal' && method === 'userQuestionEvents'
-				? this.deps.openQuestionEvents(device)
-				: await this.deps.stream({ namespace: ns, method, args, peer: device.peer })
-		} catch (error) {
-			if (device.activityRevision !== revision) return
-			this.send(device, {
-				id,
-				ok: false,
-				error: {
-					code: error?.code ?? 'narwal/bridge',
-					message: error?.message ?? String(error),
-					details: error?.details ?? {},
-				},
-			})
-			return
-		}
-		const iterator = handle?.[Symbol.asyncIterator]?.()
-		if (device.disposed || device.activityRevision !== revision) {
-			this.disposeStream(device, id, { iterator, handle })
-			return
-		}
-		if (!iterator) {
-			this.send(device, { id, ok: false, error: { code: 'narwal/bridge', message: 'stream method returned no async iterator' } })
-			try { handle?.dispose?.() } catch { }
-			return
-		}
-		streamLog(this.ctx, 'runStream', { sessionId: device.sessionId, id, ns, method })
-		const task = { iterator, handle }
-		device.streams.set(id, task)
-		if (device.pendingUnsub.has(id)) {
-			device.pendingUnsub.delete(id)
-			device.streams.delete(id)
-			this.disposeStream(device, id, task)
-			this.send(device, { id, done: true })
-			return
-		}
-		void (async () => {
-			try {
-				while (true) {
-					const next = await iterator.next()
-					if (this.devices.get(device.sessionId) !== device) return
-					if (device.streams.get(id) !== task) return
-					if (next?.done) {
-						device.streams.delete(id)
-						this.send(device, { id, done: true })
-						return
-					}
-					this.send(device, { id, item: next?.value })
-				}
-			} catch (error) {
-				if (device.streams.get(id) !== task) return
-				device.streams.delete(id)
-				this.send(device, {
-					id,
-					ok: false,
-					error: {
-						code: error?.code ?? 'narwal/stream',
-						message: error?.message ?? String(error),
-						details: error?.details ?? {},
-					},
-				})
-			} finally {
-				try { handle?.dispose?.() } catch { /* nop */ }
-			}
-		})()
-	}
 }
 
 async function build(ctx, config, runtime) {
@@ -902,6 +421,7 @@ async function build(ctx, config, runtime) {
 		githubProjectsInstaller: createGitHubProjectsInstaller(() => ctx.get('pluginManager')),
 		store,
 	})
+	runtime?.registerStop?.(() => bridge.disposeAll())
 	try {
 		await bridge.start()
 		if (config?.relay?.enabled && String(config.relay?.url || '').trim() && String(config.relay?.ticket || '').trim()) {

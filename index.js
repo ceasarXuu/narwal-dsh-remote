@@ -1,132 +1,184 @@
-/**
- * Narwal Server — host 半区·引导壳。
- *
- * DSH 自带的 hmr 只热更配置（`root: []`，模块热重载默认关闭），改 node_modules
- * 下的插件代码不会被重新加载。为了改代码不用重启 DSH，这里把实现全部放进
- * `impl.js`，由本壳负责：
- *
- *   1. 监听 impl.js 的 mtime
- *   2. 变化时用 `?v=<timestamp>` 重新 import（绕开 ESM 模块缓存）
- *   3. 先停旧 bridge 释放端口，再起新 bridge，失败则记录并保留空闲状态
- *
- * 因此：改 impl.js / client.js 都不需要重启 DSH。
- * 只有改本文件（壳）本身才需要重启 —— 壳应该保持极小且稳定。
- */
-import { mkdirSync, watch, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import { createRuntimeUpdates } from './runtime-updates.js'
 
 const IMPL = fileURLToPath(new URL('./impl.js', import.meta.url))
+const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
 const STATUS_DIR = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'narwal-server')
+const FIRST_CHECK_DELAY = 30_000
+const UPDATE_INTERVAL = 6 * 60 * 60_000
 
-/** 宿主日志不易获取：把最近一次加载结果落盘，便于排查热重载。 */
 function writeStatus(status) {
 	try {
-		mkdirSync(STATUS_DIR, { recursive: true })
-		writeFileSync(join(STATUS_DIR, 'status.json'), JSON.stringify({ ...status, impl: IMPL, pid: process.pid, at: new Date().toISOString() }, null, 2))
-	} catch {
-		/* nop */
-	}
+		mkdirSync(STATUS_DIR, { recursive: true, mode: 0o700 })
+		writeFileSync(join(STATUS_DIR, 'status.json'), JSON.stringify({ ...status, pid: process.pid, at: new Date().toISOString() }, null, 2))
+	} catch { /* diagnostics must not stop the bridge */ }
 }
-const RELOAD_DEBOUNCE_MS = 300
-/** 旧 server 关闭到新 server bind 之间的让位时间，避免偶发 EADDRINUSE。 */
-const PORT_RELEASE_MS = 150
 
 export function apply(ctx, config) {
 	const log = (msg, error) => {
-		const line = `[narwal] ${msg}${error ? `: ${error && error.stack ? error.stack : String(error)}` : ''}`
+		const line = `[narwal] ${msg}${error ? `: ${error.stack ?? error}` : ''}`
+		try { process.stderr.write(`${line}\n`) } catch { /* unavailable */ }
+		try { ctx.logger('narwal-server').warn('%s', line) } catch { /* unavailable */ }
+	}
+	const bundled = { version: manifest.version, entry: IMPL }
+	const development = manifest.private === true
+	const updates = development ? null : createRuntimeUpdates(join(STATUS_DIR, 'runtime'), bundled.version)
+	const ws = import('ws').catch(() => undefined)
+	let updateStatus = 'idle'
+	let stopped = false
+	let current
+	let queue = Promise.resolve()
+	let watching
+	let debounce
+	let updateTimer
+	let rejectedVersion
+	let previousRelease
+
+	const report = () => writeStatus({
+		ok: Boolean(current),
+		version: current?.version,
+		impl: current?.entry ?? IMPL,
+		update: updateStatus,
+		failedVersion: rejectedVersion,
+	})
+	const enqueue = (action) => {
+		queue = queue.then(() => stopped ? undefined : action()).catch(error => {
+			report()
+			log('bridge operation failed', error)
+		})
+		return queue
+	}
+	const prepare = async (release, reload = false) => {
+		const url = pathToFileURL(release.entry)
+		if (reload) url.searchParams.set('revision', randomUUID())
+		const module = await import(url.href)
+		if (typeof module.start !== 'function') throw new Error('Narwal runtime has no start function')
+		return { ...release, start: module.start }
+	}
+	const start = async (release) => {
+		const transport = await ws
+		if (stopped) return
+		let dispose
 		try {
-			process.stderr.write(line + '\n')
-		} catch {
-			/* nop */
+			const handle = await release.start(ctx, config, {
+				ws: transport,
+				registerStop(stop) { dispose = stop },
+			})
+			if (typeof handle?.stop !== 'function') throw new Error('Narwal runtime did not return a stop function')
+			if (stopped) await handle.stop()
+			else current = { ...release, stop: () => handle.stop() }
+		} catch (error) {
+			try { await dispose?.() } catch (stopError) { log('failed runtime could not stop', stopError) }
+			throw error
 		}
+	}
+	const switchRuntime = async (next) => {
+		if (stopped) return
+		const previous = current
+		await previous?.stop()
+		current = undefined
 		try {
-			ctx.logger('narwal-server').warn('%s%s', msg, error ? `: ${String(error)}` : '')
-		} catch {
-			/* logger 不可用时静默 */
+			await start(next)
+		} catch (error) {
+			if (!stopped && previous) await start(previous)
+			throw error
 		}
 	}
 
-	let stopped = false
-	let loading = false
-	let pending = false
-	let current = null
-	let debounce = null
-	let watcher = null
-
-	const load = async () => {
-		if (stopped) return
-		if (loading) {
-			pending = true
-			return
-		}
-		loading = true
-
-		/* 先放掉旧实例，端口才能被新实例绑定 */
-		const previous = current
-		current = null
-		try {
-			previous?.stop?.()
-		} catch (error) {
-			log('previous instance stop failed', error)
-		}
-		if (previous) await new Promise((resolve) => setTimeout(resolve, PORT_RELEASE_MS))
-
-		try {
-			const url = new URL(`./impl.js?v=${Date.now()}`, import.meta.url).href
-			const impl = await import(url)
-			if (stopped) return
-			current = await impl.start(ctx, config)
-			log('bridge started')
-			writeStatus({ ok: true })
-		} catch (error) {
-			log('bridge start failed', error)
-			writeStatus({ ok: false, error: error && error.stack ? error.stack : String(error) })
-		} finally {
-			loading = false
-			if (pending && !stopped) {
-				pending = false
-				void load()
+	void enqueue(async () => {
+		const cached = updates?.installed() ?? { releases: [] }
+		rejectedVersion = cached.rejected
+		let rolledBack = false
+		for (const [index, release] of cached.releases.entries()) {
+			try {
+				await switchRuntime(await prepare(release))
+				previousRelease = cached.releases[index + 1]
+				break
+			} catch (error) {
+				if (stopped) return
+				if (!rolledBack) rejectedVersion = release.version
+				rolledBack = true
+				log(`cached runtime ${release.version} failed`, error)
 			}
 		}
+		if (!current && !stopped) await switchRuntime(await prepare(bundled, development))
+		if (!stopped) {
+			if (rolledBack && current) {
+				updateStatus = 'rolled-back'
+				updates?.remember(current, previousRelease, rejectedVersion)
+			}
+			report()
+		}
+	})
+
+	async function checkForUpdate() {
+		if (!updates || stopped) return
+		try {
+			const next = await updates.stage(current?.version ?? bundled.version, rejectedVersion)
+			if (next) await enqueue(async () => {
+				const previous = current
+				try {
+					await switchRuntime(await prepare(next))
+					if (!stopped) {
+						previousRelease = previous
+						rejectedVersion = undefined
+						updates.remember(next, previous)
+						updateStatus = 'updated'
+						log(`activated runtime ${next.version}`)
+					}
+				} catch (error) {
+					rejectedVersion = next.version
+					updateStatus = current?.version === next.version ? 'cache-write-failed' : 'rolled-back'
+					if (!stopped && current && current.version !== next.version) {
+						try { updates.remember(current, previousRelease, rejectedVersion) }
+						catch (cacheError) { log('cannot save runtime rollback', cacheError) }
+					}
+					log(`runtime ${next.version} update failed`, error)
+				}
+				report()
+			})
+		} catch (error) {
+			updateStatus = 'check-failed'
+			if (!stopped) report()
+			log('runtime update check failed', error)
+		} finally {
+			if (!stopped) updateTimer = setTimeout(checkForUpdate, UPDATE_INTERVAL).unref()
+		}
 	}
 
-	void load()
-
-	/* 监听所在目录而非文件本身：编辑器/sed/git 以替换方式保存会换 inode，盯文件会永久失联 */
-	try {
-		watcher = watch(dirname(IMPL), (_event, filename) => {
-			if (filename && String(filename) !== basename(IMPL)) return
-			if (debounce) clearTimeout(debounce)
-			debounce = setTimeout(() => {
-				debounce = null
-				log('impl.js changed — reloading')
-				if (current) {
-					/* 停掉再重载：load() 内部会先释放旧实例 */
-				}
-				void load()
-			}, RELOAD_DEBOUNCE_MS)
-		})
-		watcher.on('error', (error) => log('watcher error', error))
-	} catch (error) {
-		log('watcher unavailable; hot reload disabled', error)
+	if (updates && config?.autoUpdate !== false) {
+		updateTimer = setTimeout(checkForUpdate, FIRST_CHECK_DELAY).unref()
+	}
+	if (development) {
+		try {
+			watching = watch(dirname(IMPL), (_event, filename) => {
+				if (filename && String(filename) !== basename(IMPL)) return
+				clearTimeout(debounce)
+				debounce = setTimeout(() => {
+					void enqueue(async () => {
+						await switchRuntime(await prepare(bundled, true))
+						if (!stopped) report()
+					})
+				}, 300)
+			})
+			watching.on('error', error => log('hot reload unavailable', error))
+		} catch (error) {
+			log('hot reload unavailable', error)
+		}
 	}
 
 	return () => {
 		stopped = true
-		if (debounce) clearTimeout(debounce)
-		try {
-			watcher?.close()
-		} catch {
-			/* nop */
-		}
-		try {
-			current?.stop?.()
-		} catch {
-			/* nop */
-		}
-		current = null
+		clearTimeout(debounce)
+		clearTimeout(updateTimer)
+		watching?.close()
+		if (current) void Promise.resolve(current.stop()).catch(error => log('bridge stop failed', error))
+		current = undefined
 	}
 }
 

@@ -23,6 +23,8 @@ You’ll need DeepSeek Harness (DSH) on your desktop and the Narwal iOS app. Kee
 2. On the desktop, open **Settings → Narwal** and create a pairing token.
 3. Scan the pairing QR code or paste the pairing link into Narwal on your iPhone. To disconnect a device and invalidate its saved link, revoke its token in DSH.
 
+Version 0.6.0 introduces automatic bridge updates. Install it once from DSH's plugin settings to enable future updates. Narwal checks the stable npm release by default and restores a working bridge if the new version cannot start. Pairings are kept in the desktop's Narwal data directory.
+
 ## Build from source
 
 Run these commands from a checkout of this repository:

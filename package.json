@@ -1,6 +1,6 @@
 {
   "name": "narwal-dsh-remote",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Narwal Server: local connection bridge (pairing tokens, QR, mDNS, Narwal Protocol v1 over WebSocket) that lets the Narwal iOS client drive this DSH instance.",
   "type": "module",
   "license": "MIT",
@@ -46,10 +46,13 @@
     "index.js",
     "client.js",
     "impl.js",
+    "bridge-panel.js",
+    "bridge-rpc.js",
     "token-store.js",
     "api-balances.js",
     "github-projects.js",
     "github-projects-install.js",
+    "runtime-updates.js",
     "traffic-usage.js",
     "user-questions.js",
     "cordis.patch.yml",
@@ -68,6 +71,21 @@
       "immediately": true,
       "inject": []
     }
+  },
+  "narwalRuntime": {
+    "format": 1,
+    "files": [
+      "impl.js",
+      "bridge-panel.js",
+      "bridge-rpc.js",
+      "api-balances.js",
+      "github-projects.js",
+      "github-projects-install.js",
+      "token-store.js",
+      "traffic-usage.js",
+      "user-questions.js",
+      "vendor/toqr.mjs"
+    ]
   },
   "scripts": {
     "check": "node scripts/check-client.mjs",
