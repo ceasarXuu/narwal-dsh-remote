@@ -45,6 +45,8 @@
     "impl.js",
     "token-store.js",
     "api-balances.js",
+    "github-projects.js",
+    "github-projects-install.js",
     "traffic-usage.js",
     "user-questions.js",
     "cordis.patch.yml",

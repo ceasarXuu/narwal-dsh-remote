@@ -36,6 +36,8 @@ import { homedir, hostname, networkInterfaces, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
+import { readGitHubProjects } from './github-projects.js'
+import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { TokenStore } from './token-store.js'
 import { TrafficUsage } from './traffic-usage.js'
 import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
@@ -567,7 +569,7 @@ class NarwalBridge {
 		}
 		this.send(device, {
 			event: 'hello',
-		payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account },
+			payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account, githubProjects: true },
 		})
 		this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
@@ -642,6 +644,22 @@ class NarwalBridge {
 				return
 			}
 			void readApiBalances(this.ctx).then((value) => this.send(device, { id, ok: true, value }))
+			return
+		}
+		if (ns === 'narwal' && ['getGitHubProjects', 'installGitHubProjects', 'enableGitHubProjects'].includes(method)) {
+			const reply = (value) => this.send(device, { id, ok: true, value })
+			if (!device.peer || device.tokenId === 'relay') {
+				reply({ kind: 'unavailable' })
+				return
+			}
+			const installer = this.deps.githubProjectsInstaller
+			if (method !== 'getGitHubProjects') {
+				reply(installer.start(method === 'installGitHubProjects' ? 'install' : 'enable'))
+				return
+			}
+			void readGitHubProjects(this.ctx.get('webServer'), installer, args).then(reply).catch((error) => {
+				this.send(device, { id, ok: false, error: { code: error.code, message: error.message, details: error.details } })
+			})
 			return
 		}
 		const result = ns === 'narwal' && method === 'answerUserQuestion'
@@ -759,6 +777,7 @@ async function build(ctx, config) {
 		invoke: (request) => gateway?.invoke?.(request),
 		stream: (request) => gateway?.stream?.(request),
 		openQuestionEvents: (device) => openQuestionEvents(gateway, questionRpc, device),
+		githubProjectsInstaller: createGitHubProjectsInstaller(() => ctx.get('pluginManager')),
 		store,
 	})
 	bridge.start()

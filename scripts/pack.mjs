@@ -18,7 +18,10 @@ try {
   }
 
   // Preserve module paths used by DSH and the host hot reloader.
-  const runtimeFiles = ['index.js', 'impl.js', 'api-balances.js', 'traffic-usage.js', 'client.js', 'vendor/toqr.mjs']
+  const runtimeFiles = [
+    'index.js', 'impl.js', 'api-balances.js', 'github-projects.js', 'github-projects-install.js',
+    'traffic-usage.js', 'client.js', 'vendor/toqr.mjs',
+  ]
   for (const file of runtimeFiles) {
     const output = join(staging, file)
     execFileSync('npm', [
