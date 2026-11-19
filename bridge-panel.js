@@ -33,14 +33,19 @@ function renderQrSvg(data, size) {
 		`<rect width="${total}" height="${total}" fill="#ffffff"/><g fill="#000000">${rects}</g></svg>`
 }
 
-/** 首个非环回 IPv4 —— QR 载荷里的手机可达 host。 */
+/** 优先选择可用的直连 IPv4，只有隧道可用时才使用隧道地址。 */
 function autoLanIp() {
 	try {
-		for (const nets of Object.values(networkInterfaces())) {
+		let tunnelAddress = null
+		for (const [name, nets] of Object.entries(networkInterfaces())) {
+			const tunnel = /^(?:utun|tun|tap|wg|ppp|ipsec)\d*$/i.test(name)
 			for (const net of nets ?? []) {
-				if (net.family === 'IPv4' && !net.internal) return net.address
+				if (net.family !== 'IPv4' || net.internal || net.address.startsWith('169.254.')) continue
+				if (!tunnel) return net.address
+				tunnelAddress ??= net.address
 			}
 		}
+		return tunnelAddress
 	} catch { /* frozen env */ }
 	return null
 }
