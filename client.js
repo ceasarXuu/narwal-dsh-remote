@@ -17,6 +17,9 @@ window.__ModuleLoader__.load({
 			emptyDesc: 'Generate a QR code, then scan it with Narwal on your phone.',
 			emptyAction: 'Generate pairing QR code',
 			devices: 'Paired devices',
+			pairingLimit: 'All pairing slots are in use. Remove a device to pair another.',
+			waitingForScan: 'Waiting for a scan',
+			codeExpiry: 'New codes expire 10 minutes after creation.',
 			online: 'Online',
 			offline: 'Not connected',
 			showQr: 'QR code',
@@ -44,6 +47,9 @@ window.__ModuleLoader__.load({
 			emptyDesc: '生成二维码，用手机上的 Narwal 扫描即可连接。',
 			emptyAction: '生成配对二维码',
 			devices: '已配对设备',
+			pairingLimit: '配对名额已满。请移除一台设备后再添加。',
+			waitingForScan: '待扫码',
+			codeExpiry: '新二维码生成后 10 分钟内有效。',
 			online: '在线',
 			offline: '未连接',
 			showQr: '二维码',
@@ -95,7 +101,8 @@ window.__ModuleLoader__.load({
 					alt: 'Narwal pairing QR', width: 176, height: 176,
 					style: { imageRendering: 'pixelated', background: '#fff', padding: 8, borderRadius: 10 }
 				}),
-				React.createElement('div', { style: sub }, t('scanHint')))
+				React.createElement('div', { style: sub }, t('scanHint')),
+				token.expiresAt ? React.createElement('div', { style: sub }, t('codeExpiry')) : null)
 		}
 
 		function DeviceName(props) {
@@ -127,7 +134,7 @@ window.__ModuleLoader__.load({
 					React.createElement('span', { style: { width: 8, height: 8, borderRadius: 4, flex: 'none', background: online ? '#2f9e5e' : '#c4c4c4' } }),
 					React.createElement('div', { style: { flex: 1, minWidth: 0 } },
 						React.createElement(DeviceName, { token, t, onRename }),
-						React.createElement('div', { style: sub }, online ? t('online') : t('offline'))),
+						React.createElement('div', { style: sub }, online ? t('online') : token.expiresAt ? t('waitingForScan') : t('offline'))),
 					React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')),
 					React.createElement('button', { style: btnDanger, onClick: onRemove }, t('remove'))),
 				open ? React.createElement(QrBlock, { token, port, t }) : null)
@@ -214,10 +221,11 @@ window.__ModuleLoader__.load({
 			try { snapshot = (typeof form.getSnapshot === 'function' ? form.getSnapshot() : form.get?.()) } catch {}
 			const port = Number(snapshot?.value?.port) || 48317
 			const [tokens, setTokens] = useState(null)
+			const [maxPairings, setMaxPairings] = useState(null)
 			const [online, setOnline] = useState([])
 			const [traffic, setTraffic] = useState(null)
 			const [openId, setOpenId] = useState(null)
-			const [failed, setFailed] = useState(false)
+			const [failed, setFailed] = useState(null)
 			const stopRef = useRef(false)
 			const secretRef = useRef('')
 			const base = `http://${bridgeHost}:${port}`
@@ -232,6 +240,9 @@ window.__ModuleLoader__.load({
 					secretRef.current = list[0]?.secret ?? ''
 					if (stopRef.current) return
 					setTokens(list)
+					const limit = Number.isSafeInteger(body?.maxPairings) && body.maxPairings > 0 ? body.maxPairings : null
+					setMaxPairings(limit)
+					if (limit !== null && list.length < limit) setFailed(error => error === 'pairingLimit' ? null : error)
 					const statsQuery = secretRef.current ? `?token=${encodeURIComponent(secretRef.current)}` : ''
 					const stats = await fetch(`${base}/stats${statsQuery}`)
 					const info = stats.ok ? await stats.json() : null
@@ -260,11 +271,15 @@ window.__ModuleLoader__.load({
 						headers: { 'content-type': 'application/json' },
 						body: JSON.stringify(payload)
 					})
-					if (!res.ok) throw new Error(String(res.status))
-					setFailed(false)
-					return await res.json().catch(() => null)
+					const result = await res.json().catch(() => null)
+					if (!res.ok) {
+						setFailed(res.status === 409 && result?.error === 'pairing-limit' ? 'pairingLimit' : 'failed')
+						return null
+					}
+					setFailed(null)
+					return result
 				} catch {
-					setFailed(true)
+					setFailed('failed')
 					return null
 				}
 			}, [base])
@@ -290,6 +305,7 @@ window.__ModuleLoader__.load({
 				if (openId === token.id) setOpenId(null)
 				await refresh()
 			}
+			const full = maxPairings !== null && (tokens?.length ?? 0) >= maxPairings
 
 			return React.createElement('div', { style: { maxWidth: 560 } },
 				React.createElement('p', { style: { ...sub, marginTop: 0, marginBottom: 16 } }, t('sectionDesc')),
@@ -302,8 +318,12 @@ window.__ModuleLoader__.load({
 							React.createElement('button', { style: { ...btn, marginTop: 8 }, onClick: () => { void addDevice() } }, t('emptyAction')))
 						: React.createElement('div', null,
 							React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 } },
-								React.createElement('div', { style: title }, t('devices')),
-								React.createElement('button', { style: btn, onClick: () => { void addDevice() } }, t('addDevice'))),
+								React.createElement('div', { style: title }, maxPairings === null ? t('devices') : `${t('devices')} ${tokens.length}/${maxPairings}`),
+								React.createElement('button', {
+									style: full ? { ...btn, opacity: 0.5, cursor: 'default' } : btn,
+									disabled: full, onClick: () => { void addDevice() },
+								}, t('addDevice'))),
+							full ? React.createElement('p', { style: { ...sub, marginTop: 0 } }, t('pairingLimit')) : null,
 							React.createElement('div', { style: card },
 								tokens.map((tok, i) => React.createElement(DeviceRow, {
 									key: tok.id, token: tok, port, t, first: i === 0,
@@ -313,7 +333,7 @@ window.__ModuleLoader__.load({
 									onRemove: () => { void remove(tok) },
 					onRename: (id, label) => { void rename(id, label) }
 								})))),
-				failed ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t('failed')) : null,
+				failed && !(full && failed === 'pairingLimit') ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t(failed)) : null,
 				React.createElement(TrafficSection, { traffic, t })
 			)
 		}

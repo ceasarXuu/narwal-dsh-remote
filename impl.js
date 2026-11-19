@@ -22,7 +22,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { createServer } from 'node:http'
+import { createServer, STATUS_CODES } from 'node:http'
 import { createRequire } from 'node:module'
 
 const requirePkg = createRequire(import.meta.url)
@@ -39,12 +39,18 @@ import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
 import { readGitHubProjects } from './github-projects.js'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
-import { TokenStore } from './token-store.js'
+import { MAX_PAIRINGS, TokenStore } from './token-store.js'
 import { TrafficUsage } from './traffic-usage.js'
 import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
 const TOKEN_ACTIONS = ['create', 'revoke']
+
+function panelToken(token) {
+	if (!token) return null
+	const { deviceId, ...visible } = token
+	return visible
+}
 
 /** 扁平位矩阵 → 方格 SVG(黑模块白底);手机相机可读。 */
 function renderQrSvg(data, size) {
@@ -272,21 +278,8 @@ class NarwalBridge {
 		this.log.info('bridge stopped; devices disposed')
 	}
 
-	/** 可鉴权令牌全集(自有文件 + patch config 的兼容并集,按 secret 去重)。 */
-	tokens() {
-		const seen = new Set()
-		const out = []
-		for (const t of [...(this.store?.list?.() ?? []), ...(Array.isArray(this.config?.tokens) ? this.config.tokens : [])]) {
-			if (t && typeof t === 'object' && typeof t.secret === 'string' && t.secret.length >= 8 && !seen.has(t.secret)) {
-				seen.add(t.secret)
-				out.push(t)
-			}
-		}
-		return out
-	}
-
 	findToken(secret) {
-		return this.tokens().find((t) => t.secret === secret) ?? null
+		return this.store.list().find((t) => t.secret === secret) ?? null
 	}
 
 	handleUpgrade(req, socket, head) {
@@ -306,13 +299,25 @@ class NarwalBridge {
 			this.rejectUpgrade(socket, 401, 'invalid pairing token')
 			return
 		}
+		const deviceId = url.searchParams.get('deviceId')
+		const deviceError = this.store.checkDevice(matched, deviceId)
+		if (deviceError) {
+			this.rejectUpgrade(socket, 403, deviceError)
+			return
+		}
 		this.wss.handleUpgrade(req, socket, head, (ws) => {
+			try {
+				this.store.claim(matched, deviceId)
+			} catch {
+				ws.close(1011, 'Could not save device binding')
+				return
+			}
 			void this.attach(ws, matched)
 		})
 	}
 
 	rejectUpgrade(socket, status, message) {
-		socket.write(`HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Not Found'}\r\nconnection: close\r\ncontent-length: ${message.length}\r\n\r\n${message}`)
+		socket.write(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nconnection: close\r\ncontent-length: ${message.length}\r\n\r\n${message}`)
 		socket.destroy()
 	}
 
@@ -349,11 +354,8 @@ class NarwalBridge {
 			return
 		}
 		let matched = this.findToken(url.searchParams.get('token') ?? '')
-		/*
-		 * 引导例外：一枚令牌都没有时，本机面板需要一个创建入口。
-		 * 仅限 loopback + POST /tokens + 零令牌，一旦存在任何令牌立即恢复严格鉴权。
-		 */
-		if (!matched && isTrustedLocal(req)) {
+		const isPairingProbe = url.pathname === '/stats' && url.searchParams.has('deviceId')
+		if (!matched && !isPairingProbe && url.pathname !== '/qr.svg' && isTrustedLocal(req)) {
 			/* 本机面板：可信，但仍记录一次审计 */
 			matched = { id: 'local-panel', label: 'local-panel', secret: '' }
 			auditLine(this.ctx, 'panel/local-access', { path: url.pathname, at: Date.now() })
@@ -361,6 +363,12 @@ class NarwalBridge {
 		if (!matched) {
 			res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
 			res.end('invalid token\n')
+			return
+		}
+		if (isPairingProbe) {
+			const deviceError = this.store.checkDevice(matched, url.searchParams.get('deviceId'))
+			if (deviceError) this.replyJson(res, corsHeaders, { ok: false, error: deviceError }, 403)
+			else this.replyJson(res, corsHeaders, { ok: true })
 			return
 		}
 		try {
@@ -387,7 +395,7 @@ class NarwalBridge {
 					pairHost: this.pairHost(),
 					port: Number(this.config?.port) || 48317,
 					advertiseName: this.hostLabel(),
-					tokens: this.tokens().length,
+					tokens: this.store.list().length,
 					traffic: this.traffic.snapshot(),
 					devices: [...this.devices.values()].map((d) => ({
 						sessionId: d.sessionId,
@@ -437,7 +445,8 @@ class NarwalBridge {
 				if (req.method === 'GET') {
 					this.replyJson(res, corsHeaders, {
 						pairHost: this.pairHost(),
-						tokens: this.store?.list?.() ?? [],
+						tokens: this.store.list().map(panelToken),
+						maxPairings: MAX_PAIRINGS,
 					})
 					return
 				}
@@ -448,7 +457,11 @@ class NarwalBridge {
 					body = {}
 				}
 				if (body?.action === 'create') {
-					const token = this.store.create?.(body?.label) ?? {}
+					const token = this.store.create(body?.label)
+					if (!token) {
+						this.replyJson(res, corsHeaders, { ok: false, error: 'pairing-limit' }, 409)
+						return
+					}
 					auditLine(this.ctx, 'token/create', { id: token.id, label: token.label, byToken: matched.id, at: Date.now() })
 					this.replyJson(res, corsHeaders, token)
 					return
@@ -456,7 +469,7 @@ class NarwalBridge {
 				if (body?.action === 'relabel' && typeof body?.id === 'string') {
 					auditLine(this.ctx, 'token/relabel', { id: body.id, next: String(body?.label ?? '').slice(0, 24), byToken: matched.id, at: Date.now() })
 					const updated = this.store.relabel?.(body.id, body?.label) ?? null
-					this.replyJson(res, corsHeaders, { ok: true, token: updated })
+					this.replyJson(res, corsHeaders, { ok: true, token: panelToken(updated) })
 					return
 				}
 				if (body?.action === 'revoke' && typeof body?.id === 'string') {
@@ -475,7 +488,10 @@ class NarwalBridge {
 			const host = this.pairHost()
 			const port = Number(this.config?.port) || 48317
 			const name = this.hostLabel()
-			const payload = `narwal://pair?v=1&host=${encodeURIComponent(host)}&port=${port}&token=${encodeURIComponent(matched.secret)}&name=${encodeURIComponent(name)}`
+			const params = new URLSearchParams({ v: '1', host, port: String(port), token: matched.secret, name })
+			const desktopId = this.store.getDesktopId()
+			if (desktopId) params.set('desktopId', desktopId)
+			const payload = `narwal://pair?${params}`
 			const data = toQR(payload, 1)
 			const size = Math.round(Math.sqrt(data.length)) || 0
 			res.writeHead(200, {
@@ -501,8 +517,8 @@ class NarwalBridge {
 		}
 	}
 
-	replyJson(res, extra, body) {
-		res.writeHead(200, { ...extra, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+	replyJson(res, extra, body, status = 200) {
+		res.writeHead(status, { ...extra, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
 		res.end(JSON.stringify(body))
 	}
 
@@ -569,7 +585,7 @@ class NarwalBridge {
 		}
 		this.send(device, {
 			event: 'hello',
-			payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account, githubProjects: true },
+			payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account, githubProjects: true, desktopId: this.store.getDesktopId() },
 		})
 		this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
