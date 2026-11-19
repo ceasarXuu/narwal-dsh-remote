@@ -95,3 +95,35 @@ export function openQuestionEvents(gateway, connection, device) {
 export function answerUserQuestion(device, args) {
 	return device.userQuestions?.answer(args.eventId, args.answer) ?? false
 }
+
+export function watchPendingQuestions(gateway, notify) {
+	let timer
+	const read = () => {
+		try {
+			return new Set(gateway.getPendingRemoteEvents()
+				.filter(row => row.event === 'user-questions/request' && typeof row.agentId === 'string')
+				.map(row => row.agentId))
+		} catch {
+			return null
+		}
+	}
+	return (enabled) => {
+		if (!enabled) {
+			clearInterval(timer)
+			timer = undefined
+			return
+		}
+		if (timer || typeof gateway?.getPendingRemoteEvents !== 'function') return
+		// Observe the host's outstanding requests without opening an answering waterfall.
+		let seen = read()
+		timer = setInterval(() => {
+			const pending = read()
+			if (!pending) return
+			if (seen) {
+				for (const sessionId of pending) if (!seen.has(sessionId)) notify(sessionId)
+			}
+			seen = pending
+		}, 1000)
+		timer.unref()
+	}
+}

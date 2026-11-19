@@ -39,12 +39,14 @@ import { pathToFileURL } from 'node:url'
 import { readApiBalances } from './api-balances.js'
 import { readGitHubProjects } from './github-projects.js'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
-import { MAX_PAIRINGS, TokenStore } from './token-store.js'
+// A linked DSH profile can still have the pre-pairing modules in its ESM cache.
+import { MAX_PAIRINGS, TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
-import { answerUserQuestion, openQuestionEvents } from './user-questions.js'
+import { answerUserQuestion, openQuestionEvents, watchPendingQuestions } from './user-questions.js?passive-notices'
 
 const TRACE = process.env.NARWAL_TRACE === '1'
 const TOKEN_ACTIONS = ['create', 'revoke']
+const SESSION_EVENTS = ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']
 
 function panelToken(token) {
 	if (!token) return null
@@ -168,6 +170,10 @@ class NarwalBridge {
 		this.traffic = new TrafficUsage(this.store.dir, this.log)
 		this.devices = new Map()
 		this.stopping = false
+		this.fanoutOffs = []
+		this.watchPendingQuestions = watchPendingQuestions(ctx.typertGateway, sessionId => {
+			this.notice({ kind: 'agent-question', sessionId })
+		})
 	}
 
 	startRelayDialer(relay) {
@@ -242,6 +248,7 @@ class NarwalBridge {
 		const port = (this.config && Number(this.config.port)) || 48317
 		await once(this.server.listen(port, '0.0.0.0'), 'listening')
 		this.log.info('narwal bridge listening on %d (ws /ws?token=...)', port)
+		this.listenForHostEvents()
 
 		/* heartbeat: 保活 NAT/WiFi 链路,杀掉死 socket */
 		this.aliveFails = new Map()
@@ -266,6 +273,7 @@ class NarwalBridge {
 	disposeAll() {
 		if (this.stopping) return this.stopTask
 		this.stopping = true
+		this.watchPendingQuestions(false)
 		this.stopTask = new Promise((resolve) => {
 			if (!this.server) {
 				resolve()
@@ -275,7 +283,7 @@ class NarwalBridge {
 			this.server.closeAllConnections()
 		})
 		try { this.relay?.dispose?.() } catch { /* nop */ }
-		for (const off of this.fanoutOffs ?? []) {
+		for (const off of this.fanoutOffs) {
 			try { off?.() } catch { /* nop */ }
 		}
 		this.fanoutOffs = []
@@ -288,6 +296,41 @@ class NarwalBridge {
 		this.traffic.close()
 		this.log.info('bridge stopped; devices disposed')
 		return this.stopTask
+	}
+
+	listenForHostEvents() {
+		const listen = (name, receive, options) => {
+			try {
+				const off = this.ctx.on(name, receive, options)
+				if (typeof off === 'function') this.fanoutOffs.push(off)
+			} catch { /* event not declared in this composition */ }
+		}
+		for (const event of SESSION_EVENTS) {
+			listen(event, payload => {
+				for (const device of this.devices.values()) {
+					if (device.active) this.send(device, { event, payload })
+				}
+			})
+		}
+		listen('session/event', (session, event) => {
+			if (event?.type !== 'turn/end' || event.data.reason?.kind !== 'completed') return
+			if (typeof session?.id !== 'string' || session.header?.origin === 'subagent') return
+			const sequence = event.seq ?? event.data.turn
+			if (!Number.isSafeInteger(sequence)) return
+			this.notice({ kind: 'task-complete', sessionId: session.id, eventId: String(sequence) })
+		}, { global: true })
+	}
+
+	notice(payload) {
+		for (const device of this.devices.values()) {
+			if (!device.active && device.peer) this.send(device, { event: 'narwal/notification', payload })
+		}
+	}
+
+	refreshQuestionWatcher() {
+		const observing = !this.stopping && [...this.devices.values()]
+			.some(device => device.peer && !device.active && !device.disposed)
+		this.watchPendingQuestions(observing)
 	}
 
 	findToken(secret) {
@@ -328,7 +371,7 @@ class NarwalBridge {
 				ws.close(1011, 'Could not save device binding')
 				return
 			}
-			void this.attach(ws, matched)
+			void this.attach(ws, matched, url.searchParams.get('notificationsOnly') !== '1')
 		})
 	}
 
@@ -577,7 +620,7 @@ class NarwalBridge {
 		return lan || autoLanIp() || this.hostLabel()
 	}
 
-	async attach(ws, tokenRecord) {
+	async attach(ws, tokenRecord, active = true) {
 		if (this.stopping) {
 			ws.terminate()
 			return
@@ -587,8 +630,12 @@ class NarwalBridge {
 		try {
 			peer = this.deps.createPeer?.({ principal: { kind: 'owner' }, interactions: 'answer' }) ?? null
 		} catch { peer = null }
-		const device = { socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId, streams: new Map(), pendingUnsub: new Set(), connectedAt: Date.now() }
+		const device = {
+			socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId,
+			active, activityRevision: 0, streams: new Map(), pendingUnsub: new Set(), connectedAt: Date.now(),
+		}
 		this.devices.set(sessionId, device)
+		this.refreshQuestionWatcher()
 
 		ws.on('message', (buf) => this.onFrame(device, buf.toString('utf8')))
 		ws.on('close', () => {
@@ -598,21 +645,12 @@ class NarwalBridge {
 			}
 		})
 		ws.on('error', () => { /* close follows */ })
-		for (const name of ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']) {
-			try {
-				const off = this.ctx.on(name, (payload) => {
-					if (this.devices.get(sessionId) !== device) return
-					this.send(device, { event: name, payload })
-				})
-				this.fanoutOffs ??= []
-				if (typeof off === 'function') this.fanoutOffs.push(off)
-			} catch {
-				/* event not declared in this composition */
-			}
-		}
 		this.send(device, {
 			event: 'hello',
-			payload: { sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(), account: this.account, githubProjects: true, desktopId: this.store.getDesktopId() },
+			payload: {
+				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
+				account: active ? this.account : undefined, githubProjects: true, desktopId: this.store.getDesktopId(),
+			},
 		})
 		this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
@@ -622,7 +660,30 @@ class NarwalBridge {
 		device.streams.clear()
 		try { device.peer?.dispose?.() } catch { /* idempotent */ }
 		device.disposed = true
+		this.refreshQuestionWatcher()
 		try { device.socket?.close?.() } catch { /* nop */ }
+	}
+
+	setDeviceActive(device, id, active) {
+		if (!device.peer || device.tokenId === 'relay' || typeof active !== 'boolean') {
+			this.send(device, { id, ok: false, error: { code: 'narwal/device-role-unavailable', message: 'Device role is unavailable' } })
+			return
+		}
+		const changed = device.active !== active
+		if (changed) {
+			device.active = active
+			device.activityRevision++
+			if (!active) {
+				for (const [streamId, task] of device.streams) {
+					device.streams.delete(streamId)
+					this.disposeStream(device, streamId, task)
+				}
+				device.pendingUnsub.clear()
+			}
+			this.refreshQuestionWatcher()
+		}
+		this.send(device, { id, ok: true, value: { active } })
+		if (changed && active) this.send(device, { event: 'narwal/active', payload: { account: this.account } })
 	}
 
 	disposeStream(device, id, task) {
@@ -653,6 +714,7 @@ class NarwalBridge {
 		}
 		const id = typeof request?.id === 'string' ? request.id : ''
 		if (request?.unsubscribe === true && id) {
+			if (!device.active) return
 			streamLog(this.ctx, 'unsub', { sessionId: device.sessionId, id })
 			const task = device.streams.get(id)
 			if (task) {
@@ -672,8 +734,20 @@ class NarwalBridge {
 			return
 		}
 		const args = (request?.args && typeof request.args === 'object') ? request.args : {}
+		if (ns === 'narwal' && method === 'setActive' && request?.stream !== true) {
+			this.setDeviceActive(device, id, args.active)
+			return
+		}
+		if (!device.active) {
+			this.send(device, { id, ok: false, error: { code: 'narwal/device-inactive', message: 'Desktop is not selected' } })
+			return
+		}
+		const revision = device.activityRevision
+		const sendResult = frame => {
+			if (device.activityRevision === revision) this.send(device, frame)
+		}
 		if (request?.stream === true) {
-			void this.runStream(device, id, ns, method, args)
+			void this.runStream(device, id, ns, method, args, revision)
 			return
 		}
 		if (ns === 'narwal' && method === 'getTrafficUsage') {
@@ -686,11 +760,11 @@ class NarwalBridge {
 				this.send(device, { id, ok: true, value: { status: 'unsupported' } })
 				return
 			}
-			void readApiBalances(this.ctx).then((value) => this.send(device, { id, ok: true, value }))
+			void readApiBalances(this.ctx).then((value) => sendResult({ id, ok: true, value }))
 			return
 		}
 		if (ns === 'narwal' && ['getGitHubProjects', 'installGitHubProjects', 'enableGitHubProjects'].includes(method)) {
-			const reply = (value) => this.send(device, { id, ok: true, value })
+			const reply = (value) => sendResult({ id, ok: true, value })
 			if (!device.peer || device.tokenId === 'relay') {
 				reply({ kind: 'unavailable' })
 				return
@@ -701,7 +775,7 @@ class NarwalBridge {
 				return
 			}
 			void readGitHubProjects(this.ctx.get('webServer'), installer, args).then(reply).catch((error) => {
-				this.send(device, { id, ok: false, error: { code: error.code, message: error.message, details: error.details } })
+				sendResult({ id, ok: false, error: { code: error.code, message: error.message, details: error.details } })
 			})
 			return
 		}
@@ -709,9 +783,9 @@ class NarwalBridge {
 			? Promise.resolve().then(() => answerUserQuestion(device, args))
 			: this.deps.invoke({ namespace: ns, method, args, peer: device.peer })
 		void result.then((value) => {
-			this.send(device, { id, ok: true, value })
+			sendResult({ id, ok: true, value })
 		}).catch((error) => {
-			this.send(device, {
+			sendResult({
 				id,
 				ok: false,
 				error: {
@@ -723,7 +797,7 @@ class NarwalBridge {
 		})
 	}
 
-	async runStream(device, id, ns, method, args) {
+	async runStream(device, id, ns, method, args, revision) {
 		if (typeof this.deps?.stream !== 'function') {
 			this.send(device, { id, ok: false, error: { code: 'narwal/bridge', message: 'stream() bridge not wired' } })
 			return
@@ -738,6 +812,7 @@ class NarwalBridge {
 				? this.deps.openQuestionEvents(device)
 				: await this.deps.stream({ namespace: ns, method, args, peer: device.peer })
 		} catch (error) {
+			if (device.activityRevision !== revision) return
 			this.send(device, {
 				id,
 				ok: false,
@@ -750,6 +825,10 @@ class NarwalBridge {
 			return
 		}
 		const iterator = handle?.[Symbol.asyncIterator]?.()
+		if (device.disposed || device.activityRevision !== revision) {
+			this.disposeStream(device, id, { iterator, handle })
+			return
+		}
 		if (!iterator) {
 			this.send(device, { id, ok: false, error: { code: 'narwal/bridge', message: 'stream method returned no async iterator' } })
 			try { handle?.dispose?.() } catch { }
