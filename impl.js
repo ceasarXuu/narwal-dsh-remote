@@ -167,6 +167,7 @@ class NarwalBridge {
 		this.log = ctx.logger('narwal-server')
 		this.traffic = new TrafficUsage(this.store.dir, this.log)
 		this.devices = new Map()
+		this.stopping = false
 	}
 
 	startRelayDialer(relay) {
@@ -211,7 +212,7 @@ class NarwalBridge {
 			if (this.relay) {
 				this.relay.closed = true
 				if (this.relay.timer) clearInterval(this.relay.timer)
-				try { this.relay.socket?.close?.(1000, 'plugin stop') } catch { /* nop */ }
+				try { this.relay.socket?.terminate?.() } catch { /* nop */ }
 			}
 		}
 	}
@@ -263,6 +264,16 @@ class NarwalBridge {
 	}
 
 	disposeAll() {
+		if (this.stopping) return this.stopTask
+		this.stopping = true
+		this.stopTask = new Promise((resolve) => {
+			if (!this.server) {
+				resolve()
+				return
+			}
+			this.server.close(() => resolve())
+			this.server.closeAllConnections()
+		})
 		try { this.relay?.dispose?.() } catch { /* nop */ }
 		for (const off of this.fanoutOffs ?? []) {
 			try { off?.() } catch { /* nop */ }
@@ -270,12 +281,13 @@ class NarwalBridge {
 		this.fanoutOffs = []
 		if (this.heartbeat) clearInterval(this.heartbeat)
 		this.aliveFails?.clear()
-		try { this.wss?.close() } catch { /* nop */ }
 		for (const device of [...this.devices.values()]) this.teardown(device)
 		this.devices.clear()
-		try { this.server?.close() } catch { /* nop */ }
+		for (const socket of this.wss?.clients ?? []) socket.terminate()
+		try { this.wss?.close() } catch { /* nop */ }
 		this.traffic.close()
 		this.log.info('bridge stopped; devices disposed')
+		return this.stopTask
 	}
 
 	findToken(secret) {
@@ -283,6 +295,10 @@ class NarwalBridge {
 	}
 
 	handleUpgrade(req, socket, head) {
+		if (this.stopping) {
+			socket.destroy()
+			return
+		}
 		let url
 		try {
 			url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
@@ -322,6 +338,10 @@ class NarwalBridge {
 	}
 
 	async handlePlain(req, res) {
+		if (this.stopping) {
+			res.writeHead(503).end()
+			return
+		}
 		/* CORS:面板跨端口号取路由;只接受同机 loopback 源 */
 		const origin = req.headers.origin
 		const corsHeaders = {}
@@ -412,7 +432,7 @@ class NarwalBridge {
 			this.replyJson(res, corsHeaders, { ok: true, action: 'reloadscheduled' })
 				/* 给 res 写完瞬息再重建(自桥替换:关闭 + 新建覆盖同一端口) */
 				setTimeout(() => {
-					if (typeof this.onReloadRequest === 'function') {
+					if (!this.stopping && typeof this.onReloadRequest === 'function') {
 						try { this.disposeAll() } catch { }
 						if (typeof this.reuseBuildRef === 'function') this.reuseBuildRef()
 					}
@@ -424,6 +444,7 @@ class NarwalBridge {
 				try {
 					body = JSON.parse(await this.readBody(req))
 				} catch { body = {} }
+				if (this.stopping || res.destroyed) return
 				if (typeof body?.sessionId === 'string') {
 					const device = this.devices.get(body.sessionId)
 					if (!device) {
@@ -456,6 +477,7 @@ class NarwalBridge {
 				} catch {
 					body = {}
 				}
+				if (this.stopping || res.destroyed) return
 				if (body?.action === 'create') {
 					const token = this.store.create(body?.label)
 					if (!token) {
@@ -485,6 +507,7 @@ class NarwalBridge {
 			}
 			/* /qr.svg */
 			const { toQR } = await this.loadToqr()
+			if (this.stopping || res.destroyed) return
 			const host = this.pairHost()
 			const port = Number(this.config?.port) || 48317
 			const name = this.hostLabel()
@@ -555,6 +578,10 @@ class NarwalBridge {
 	}
 
 	async attach(ws, tokenRecord) {
+		if (this.stopping) {
+			ws.terminate()
+			return
+		}
 		const sessionId = `nv_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 		let peer = null
 		try {
@@ -803,7 +830,7 @@ async function build(ctx, config, runtime) {
 		}
 		return bridge
 	} catch (error) {
-		try { bridge.disposeAll() } catch { /* retain startup error */ }
+		try { await bridge.disposeAll() } catch { /* retain startup error */ }
 		throw error
 	}
 }
@@ -813,7 +840,7 @@ export async function start(ctx, config, runtime) {
 	if (!bridge) throw new Error('ws module unavailable; bridge not started')
 	return {
 		stop() {
-			try { bridge?.disposeAll?.() } catch { /* nop */ }
+			return bridge.disposeAll()
 		},
 	}
 }
