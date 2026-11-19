@@ -3,6 +3,7 @@ import { networkInterfaces } from 'node:os'
 
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
 
+const MAX_PAIRING_HOSTS = 3
 const requirePkg = createRequire(import.meta.url)
 const VERSION = (() => {
 	try {
@@ -34,20 +35,22 @@ function renderQrSvg(data, size) {
 }
 
 /** 优先选择可用的直连 IPv4，只有隧道可用时才使用隧道地址。 */
-function autoLanIp() {
+function autoLanIps() {
 	try {
+		const addresses = []
 		let tunnelAddress = null
 		for (const [name, nets] of Object.entries(networkInterfaces())) {
 			const tunnel = /^(?:utun|tun|tap|wg|ppp|ipsec)\d*$/i.test(name)
 			for (const net of nets ?? []) {
-				if (net.family !== 'IPv4' || net.internal || net.address.startsWith('169.254.')) continue
-				if (!tunnel) return net.address
-				tunnelAddress ??= net.address
+				if (net.family !== 'IPv4' || net.internal || net.address.startsWith('127.') || net.address.startsWith('169.254.')) continue
+				if (tunnel) tunnelAddress ??= net.address
+				else addresses.push(net.address)
 			}
 		}
-		return tunnelAddress
+		if (!addresses.length && tunnelAddress) addresses.push(tunnelAddress)
+		return addresses
 	} catch { /* frozen env */ }
-	return null
+	return []
 }
 
 /** 只有本机回环才允许「首次创建令牌」的引导路径。 */
@@ -111,9 +114,12 @@ function loadToqr(bridge) {
 	return bridge.toqrp
 }
 
-function pairHost(bridge) {
+function pairHosts(bridge) {
 	const lan = String(bridge.config?.lanHost ?? '').trim()
-	return lan || autoLanIp() || bridge.hostLabel()
+	const addresses = autoLanIps()
+	if (lan) addresses.unshift(lan)
+	if (!addresses.length) addresses.push(bridge.hostLabel())
+	return [...new Set(addresses)].slice(0, MAX_PAIRING_HOSTS)
 }
 
 export async function handlePanelRequest(bridge, req, res) {
@@ -191,7 +197,7 @@ export async function handlePanelRequest(bridge, req, res) {
 		if (url.pathname === '/stats') {
 			replyJson(res, corsHeaders, {
 				version: VERSION,
-				pairHost: pairHost(bridge),
+				pairHost: pairHosts(bridge)[0],
 				port: Number(bridge.config?.port) || 48317,
 				advertiseName: bridge.hostLabel(),
 				tokens: bridge.store.list().length,
@@ -244,7 +250,7 @@ export async function handlePanelRequest(bridge, req, res) {
 		if (url.pathname === '/tokens') {
 			if (req.method === 'GET') {
 				replyJson(res, corsHeaders, {
-					pairHost: pairHost(bridge),
+					pairHost: pairHosts(bridge)[0],
 					tokens: bridge.store.list().map(panelToken),
 					maxPairings: MAX_PAIRINGS,
 				})
@@ -287,12 +293,15 @@ export async function handlePanelRequest(bridge, req, res) {
 		/* /qr.svg */
 		const { toQR } = await loadToqr(bridge)
 		if (bridge.stopping || res.destroyed) return
-		const host = pairHost(bridge)
+		const [host, ...alternateHosts] = pairHosts(bridge)
 		const port = Number(bridge.config?.port) || 48317
 		const name = bridge.hostLabel()
 		const params = new URLSearchParams({ v: '1', host, port: String(port), token: matched.secret, name })
 		const desktopId = bridge.store.getDesktopId()
-		if (desktopId) params.set('desktopId', desktopId)
+		if (desktopId) {
+			params.set('desktopId', desktopId)
+			for (const alternate of alternateHosts) params.append('hostAlt', alternate)
+		}
 		const payload = `narwal://pair?${params}`
 		const data = toQR(payload, 1)
 		const size = Math.round(Math.sqrt(data.length)) || 0

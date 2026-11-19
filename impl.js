@@ -26,7 +26,7 @@ import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { handlePanelRequest } from './bridge-panel.js?lan-host-selection'
+import { handlePanelRequest } from './bridge-panel.js?pairing-host-candidates'
 import { handleDeviceFrame } from './bridge-rpc.js'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
