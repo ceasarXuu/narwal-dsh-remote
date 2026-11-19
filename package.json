@@ -18,8 +18,11 @@
     "ios"
   ],
   "engines": {
-    "dsh": ">=0.2.1-rc.2 <0.3.0",
+    "dsh": "*",
     "node": ">=22"
+  },
+  "dependencies": {
+    "ws": "8.23.0"
   },
   "publishConfig": {
     "access": "public",

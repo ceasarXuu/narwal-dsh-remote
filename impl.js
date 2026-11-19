@@ -21,6 +21,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 
@@ -222,7 +223,7 @@ class NarwalBridge {
 		}, delay)
 	}
 
-	start() {
+	async start() {
 		this.server = createServer((req, res) => {
 			void this.handlePlain(req, res)
 		})
@@ -232,9 +233,8 @@ class NarwalBridge {
 		this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head))
 
 		const port = (this.config && Number(this.config.port)) || 48317
-		this.server.listen(port, '0.0.0.0', () => {
-			this.log.info('narwal bridge listening on %d (ws /ws?token=...)', port)
-		})
+		await once(this.server.listen(port, '0.0.0.0'), 'listening')
+		this.log.info('narwal bridge listening on %d (ws /ws?token=...)', port)
 
 		/* heartbeat: 保活 NAT/WiFi 链路,杀掉死 socket */
 		this.aliveFails = new Map()
@@ -754,10 +754,10 @@ class NarwalBridge {
 	}
 }
 
-async function build(ctx, config) {
+async function build(ctx, config, runtime) {
 	let wsMod = null
 	try {
-		wsMod = unwrapWs(await import('ws').catch(() => null)) ?? await runtimeWs()
+		wsMod = unwrapWs(runtime?.ws) ?? await runtimeWs()
 	} catch { wsMod = null }
 	if (!wsMod?.WebSocketServer) {
 		ctx.logger('narwal-server').warn('ws module unavailable; bridge disabled this session')
@@ -780,15 +780,20 @@ async function build(ctx, config) {
 		githubProjectsInstaller: createGitHubProjectsInstaller(() => ctx.get('pluginManager')),
 		store,
 	})
-	bridge.start()
-	if (config?.relay?.enabled && String(config.relay?.url || '').trim() && String(config.relay?.ticket || '').trim()) {
-		bridge.startRelayDialer(config.relay)
+	try {
+		await bridge.start()
+		if (config?.relay?.enabled && String(config.relay?.url || '').trim() && String(config.relay?.ticket || '').trim()) {
+			bridge.startRelayDialer(config.relay)
+		}
+		return bridge
+	} catch (error) {
+		try { bridge.disposeAll() } catch { /* retain startup error */ }
+		throw error
 	}
-	return bridge
 }
 
-export async function start(ctx, config) {
-	const bridge = await build(ctx, config)
+export async function start(ctx, config, runtime) {
+	const bridge = await build(ctx, config, runtime)
 	if (!bridge) throw new Error('ws module unavailable; bridge not started')
 	return {
 		stop() {
@@ -802,6 +807,8 @@ function unwrapWs(mod) {
 }
 
 async function runtimeWs() {
+	const dependency = unwrapWs(await import('ws').catch(() => null))
+	if (dependency?.WebSocketServer) return dependency
 	/* 软链安装时 impl.js 的真实路径在仓库里，裸 import('ws') 解析不到 DSH 的依赖 */
 	for (const base of [process.env.DSH_HOME, join(homedir(), '.dsh')]) {
 		if (!base) continue
