@@ -154,7 +154,9 @@ export function handleDeviceFrame(bridge, device, text) {
 		return
 	}
 	let result
-	if (ns === 'narwal' && method === 'answerUserQuestion') {
+	if (ns === 'narwal' && method === 'getTodayTokenUsage') {
+		result = bridge.todayTokenUsage.read(args)
+	} else if (ns === 'narwal' && method === 'answerUserQuestion') {
 		result = Promise.resolve().then(() => answerUserQuestion(device, args))
 	} else if (ns === 'narwal' && method === 'getSessionSummaries') {
 		const readList = () => bridge.deps.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, peer: device.peer })

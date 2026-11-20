@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?local-web'
-import { handleDeviceFrame } from './bridge-rpc.js?local-web'
+import { handleDeviceFrame } from './bridge-rpc.js?today-token-usage'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
@@ -29,6 +29,7 @@ import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
+import { TodayTokenUsage } from './token-usage.js'
 import { openQuestionEvents, watchPendingQuestions } from './user-questions.js?event-result-args'
 const SESSION_EVENTS = ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']
 
@@ -85,6 +86,7 @@ class NarwalBridge {
 		this.log = ctx.logger('narwal-server')
 		this.tailnetHost = configuredTailnetHost(config?.tailnetHost, this.log)
 		this.traffic = new TrafficUsage(this.store.dir, this.log)
+		this.todayTokenUsage = new TodayTokenUsage(ctx)
 		this.devices = new Map()
 		this.stopping = false
 		this.fanoutOffs = []
@@ -218,6 +220,7 @@ class NarwalBridge {
 		this.v2wss?.close()
 		try { this.wss?.close() } catch { /* nop */ }
 		this.traffic.close()
+		this.todayTokenUsage.close()
 		this.log.info('bridge stopped; devices disposed')
 		return this.stopTask
 	}
