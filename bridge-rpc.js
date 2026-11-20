@@ -45,25 +45,25 @@ export function handleDeviceFrame(bridge, device, text) {
 		return
 	}
 	if (!device.active) {
-		bridge.send(device, { id, ok: false, error: { code: 'narwal/device-inactive', message: 'Desktop is not selected' } })
+		bridge.send(device, { id, ok: false, error: { code: 'narwal/device-inactive', message: 'Desktop is not selected' } }, { unary: request?.stream !== true })
 		return
 	}
 	const revision = device.activityRevision
 	const sendResult = frame => {
-		if (device.activityRevision === revision) bridge.send(device, frame)
+		if (device.activityRevision === revision) bridge.send(device, frame, { unary: true })
 	}
 	if (request?.stream === true) {
 		void runStream(bridge, device, id, ns, method, args, revision)
 		return
 	}
 	if (ns === 'narwal' && method === 'getTrafficUsage') {
-		bridge.send(device, { id, ok: true, value: bridge.traffic.snapshot() }, false)
+		bridge.send(device, { id, ok: true, value: bridge.traffic.snapshot() }, { meter: false, unary: true })
 		return
 	}
 	if (ns === 'narwal' && method === 'getApiBalances') {
 		// Local provider account metadata is available only on the direct connection.
 		if (!device.peer || device.transport === 'relay' || device.socket === bridge.relay?.socket) {
-			bridge.send(device, { id, ok: true, value: { status: 'unsupported' } })
+			sendResult({ id, ok: true, value: { status: 'unsupported' } })
 			return
 		}
 		void readApiBalances(bridge.ctx).then((value) => sendResult({ id, ok: true, value }))

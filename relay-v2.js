@@ -70,6 +70,7 @@ class RelayV2 {
 		let timer
 		let handshakeFinished = false
 		let waiting = transport === 'relay'
+		const offersCompactReplies = waiting
 		const arm = (ms) => {
 			clearTimeout(timer)
 			timer = setTimeout(() => socket.terminate(), ms).unref()
@@ -117,20 +118,23 @@ class RelayV2 {
 					handshakeFinished = true
 					if (mode === 'pair') return this.enroll(record, noise.remotePublicKey(session), session, socket)
 					offered = ++this.generation
-					sendControl(noise, session, socket, { type: 'offer' })
+					sendControl(noise, session, socket, { type: 'offer', ...(offersCompactReplies ? { compactReplies: true } : {}) })
 					return
 				}
 				const current = this.pairings.paired(id)
 				if (!current || current.phoneKey !== record.phoneKey || !offered || offered <= (this.highest.get(id) ?? 0) ||
-					data.length > 4112 || readControl(noise, session, data)?.type !== 'activate') throw new Error('Invalid activation')
+					data.length > 4112) throw new Error('Invalid activation')
+				const activation = readControl(noise, session, data)
+				if (activation?.type !== 'activate') throw new Error('Invalid activation')
+				const compactReplies = offersCompactReplies && activation.compactReplies === true
 				const previous = this.active.get(id)
-				adapter = new RelaySecureSocket(socket, noise, session, transport, () => this.active.get(id) === adapter)
+				adapter = new RelaySecureSocket(socket, noise, session, transport, () => this.active.get(id) === adapter, compactReplies)
 				this.highest.set(id, offered)
 				this.active.set(id, adapter)
 				this.candidates.delete(socket)
 				previous?.terminate()
 				clearTimeout(timer)
-				sendControl(noise, session, socket, { type: 'activated' })
+				sendControl(noise, session, socket, { type: 'activated', ...(compactReplies ? { compactReplies: true } : {}) })
 				onReady?.()
 				void this.bridge.attach(adapter, { id, label: current.label, transport }, false).catch(() => adapter.terminate())
 			} catch {

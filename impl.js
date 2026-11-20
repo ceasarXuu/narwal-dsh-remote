@@ -399,15 +399,17 @@ class NarwalBridge {
 		try { task.handle?.dispose?.() } catch { /* nop */ }
 	}
 
-	send(device, frame, meter = true) {
+	send(device, frame, { meter = true, unary = false } = {}) {
 		if (device.disposed) return
 		try {
 			const payload = JSON.stringify(frame)
 			const transport = device.transport ?? (device.socket === this.relay?.socket ? 'relay' : 'wifi')
 			const bytes = meter ? Buffer.byteLength(payload) : 0
-			device.socket.send(payload, (error, wireBytes) => {
+			const sent = (error, wireBytes) => {
 				if (!error && bytes) this.traffic.record(transport, wireBytes ?? bytes)
-			})
+			}
+			if (device.transport) device.socket.send(payload, sent, unary && typeof frame.ok === 'boolean' && /^[ir][1-9]\d{0,15}$/.test(frame.id))
+			else device.socket.send(payload, sent)
 		} catch { /* closing */ }
 	}
 }

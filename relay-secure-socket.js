@@ -38,18 +38,20 @@ function sendProtected(noise, session, socket, plaintext, done) {
 }
 
 export class RelaySecureSocket extends EventEmitter {
-	constructor(socket, noise, session, transport, selected) {
+	constructor(socket, noise, session, transport, selected, compactReplies) {
 		super()
 		this.socket = socket
 		this.noise = noise
 		this.session = session
 		this.transport = transport
 		this.selected = selected
+		this.compactReplies = compactReplies
 		this.fragments = []
 		this.inboundBytes = 0
 		this.outgoing = []
 		this.outboundBytes = 0
 		this.nextSend = 0
+		this.lastWasCompact = false
 		this.closed = false
 	}
 
@@ -89,7 +91,7 @@ export class RelaySecureSocket extends EventEmitter {
 		sendProtected(this.noise, this.session, this.socket, pong)
 	}
 
-	send(data, done) {
+	send(data, done, unary = false) {
 		const body = Buffer.from(data)
 		if (this.closed || !this.selected()) return done?.(new Error('Secure socket is no longer active'))
 		if (!body.length || this.outboundBytes + body.length > MESSAGE_BYTES || this.outgoing.length >= MAX_PENDING_MESSAGES) {
@@ -97,7 +99,8 @@ export class RelaySecureSocket extends EventEmitter {
 			this.terminate()
 			return
 		}
-		this.outgoing.push({ body, offset: 0, wireBytes: 0, done })
+		const compact = this.compactReplies && unary && body.length <= CHUNK_BYTES
+		this.outgoing.push({ body, offset: 0, wireBytes: 0, interleavedBytes: 0, done, compact })
 		this.outboundBytes += body.length
 		this.writeNext()
 	}
@@ -113,11 +116,17 @@ export class RelaySecureSocket extends EventEmitter {
 			}, delay).unref()
 			return
 		}
-		const item = this.outgoing[0]
+		const head = this.outgoing[0]
+		const mayInterleave = head.offset > 0 && !this.lastWasCompact
+		const candidate = mayInterleave ? this.outgoing.findIndex(item => item.compact) : -1
+		// Allow a prompt first reply and cap sustained bypass traffic at one quarter of regular output.
+		const budget = Math.max(CHUNK_BYTES, head.offset / 4) - head.interleavedBytes
+		const index = candidate > 0 && this.outgoing[candidate].body.length <= budget ? candidate : 0
+		const item = this.outgoing[index]
 		const end = Math.min(item.offset + CHUNK_BYTES, item.body.length)
 		const complete = end === item.body.length
 		const plaintext = Buffer.allocUnsafe(end - item.offset + 1)
-		plaintext[0] = complete ? 0 : 1
+		plaintext[0] = index > 0 ? 3 : complete ? 0 : 1
 		item.body.copy(plaintext, 1, item.offset, end)
 		this.writing = true
 		try {
@@ -127,12 +136,14 @@ export class RelaySecureSocket extends EventEmitter {
 				if (error) return this.terminate()
 				item.offset = end
 				item.wireBytes += plaintext.length + 16
+				this.lastWasCompact = index > 0
+				if (index > 0) head.interleavedBytes += item.body.length
+				if (this.transport === 'relay') this.nextSend = performance.now() + (plaintext.length + 16) / RELAY_BYTES_PER_MS
 				if (complete) {
-					this.outgoing.shift()
+					this.outgoing.splice(index, 1)
 					this.outboundBytes -= item.body.length
 					item.done?.(undefined, item.wireBytes)
 				}
-				if (this.transport === 'relay') this.nextSend = performance.now() + (plaintext.length + 16) / RELAY_BYTES_PER_MS
 				this.writeNext()
 			})
 		} catch {
