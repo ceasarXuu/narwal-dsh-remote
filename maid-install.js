@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const NAME = '@ceasarxuu/dsh-maid'
-const VERSION = '0.1.8'
-const SHA256 = '515a7d88a3c6211b35584697213aed71ad848ba19f6770a64b0571cd4d31657a'
+const VERSION = '0.1.10'
+const SHA256 = 'd63f34de36a706f5b08e1d2b4b3320919ae61d72008e53a8e76356c2a3e798cb'
 const BOOT_TIMEOUT = 30_000
 const REGISTRY = 'https://registry.npmjs.org'
 export const MAID_ARCHIVE = 'vendor/dsh-maid.tgz'
@@ -36,7 +36,7 @@ async function stageArchive(directory) {
 }
 
 function bundleRequiresUpdate(version) {
-	return typeof version === 'string' && /^0\.(?:0\.\d+|1\.[0-7])(?:$|[-+])/.test(version)
+	return typeof version === 'string' && /^0\.(?:0\.\d+|1\.[0-9])(?:$|[-+])/.test(version)
 }
 
 export function createMaidInstaller({ getManager, getConversation, directory, log }) {
@@ -87,7 +87,10 @@ export function createMaidInstaller({ getManager, getConversation, directory, lo
 	return {
 		availability,
 		async start(enable) {
-			if (action || typeof getConversation()?.prepare === 'function') return availability()
+			const conversation = getConversation()
+			if (action || (typeof conversation?.prepare === 'function' && (enable || typeof conversation.notebook === 'function'))) {
+				return availability()
+			}
 			const pending = enable ? 'starting' : 'installing'
 			const failure = { kind: 'failed', retry: enable ? 'enable' : 'install' }
 			action = pending

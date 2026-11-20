@@ -1,5 +1,6 @@
 import { readApiBalances } from './api-balances.js'
 import { readGitHubProjects } from './github-projects.js'
+import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js'
 import { readSessionSummaries } from './session-summaries.js'
 import { sessionControlFilter } from './session-control-filter.js'
 import { readWorkspaceExpansion } from './workspace-expansion.js'
@@ -76,6 +77,20 @@ export function handleDeviceFrame(bridge, device, text) {
 		const task = method === 'getMaid' ? installer.availability(args.refresh === true) : installer.start(method === 'enableMaid')
 		void task.then(value => sendResult({ id, ok: true, value })).catch(() => {
 			sendResult({ id, ok: true, value: { kind: 'failed' } })
+		})
+		return
+	}
+	if (ns === 'narwal' && MAID_COMPANION_METHODS.has(method)) {
+		if (!device.transport || !device.peer) {
+			sendResult({ id, ok: false, error: { code: 'narwal/maid-unavailable', message: '当前连接不支持 Maid。' } })
+			return
+		}
+		void Promise.resolve().then(() => invokeMaidCompanion(bridge.ctx.get('maidConversation'), method, args)).then(value => {
+			sendResult({ id, ok: true, value })
+		}).catch(error => {
+			const known = typeof error?.code === 'string' && error.code.startsWith('narwal/maid-')
+			sendResult({ id, ok: false, error: known ? { code: error.code, message: error.message }
+				: { code: 'narwal/maid-failed', message: '桌面 Maid 暂时无法完成操作。' } })
 		})
 		return
 	}
