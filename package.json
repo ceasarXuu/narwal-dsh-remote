@@ -58,6 +58,8 @@
     "github-projects-install.js",
     "runtime-updates.js",
     "traffic-usage.js",
+    "session-summaries.js",
+    "session-control-filter.js",
     "user-questions.js",
     "cordis.patch.yml",
     "icon.svg",
@@ -90,6 +92,8 @@
       "relay-pairing-store.js",
       "relay-secure-socket.js",
       "traffic-usage.js",
+      "session-summaries.js",
+      "session-control-filter.js",
       "user-questions.js",
       "vendor/toqr.mjs"
     ]

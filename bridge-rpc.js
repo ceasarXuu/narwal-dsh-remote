@@ -1,5 +1,7 @@
 import { readApiBalances } from './api-balances.js'
 import { readGitHubProjects } from './github-projects.js'
+import { readSessionSummaries } from './session-summaries.js'
+import { sessionControlFilter } from './session-control-filter.js'
 import { answerUserQuestion } from './user-questions.js?passive-notices'
 
 function streamLog(event, details) {
@@ -41,7 +43,7 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	const args = (request?.args && typeof request.args === 'object') ? request.args : {}
 	if (ns === 'narwal' && method === 'setActive' && request?.stream !== true) {
-		bridge.setDeviceActive(device, id, args.active)
+		bridge.setDeviceActive(device, id, args.active, args.lazyAvatar === true)
 		return
 	}
 	if (!device.active) {
@@ -58,6 +60,16 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	if (ns === 'narwal' && method === 'getTrafficUsage') {
 		bridge.send(device, { id, ok: true, value: bridge.traffic.snapshot() }, { meter: false, unary: true })
+		return
+	}
+	if (ns === 'narwal' && method === 'getDesktopAvatar') {
+		if (!device.peer || device.transport === 'relay' || device.socket === bridge.relay?.socket) {
+			sendResult({ id, ok: true, value: { avatar: null } })
+			return
+		}
+		const { avatar } = bridge.account
+		const { avatarVersion } = bridge.lazyAvatarAccount
+		sendResult({ id, ok: true, value: { avatar, avatarVersion } })
 		return
 	}
 	if (ns === 'narwal' && method === 'getApiBalances') {
@@ -85,9 +97,18 @@ export function handleDeviceFrame(bridge, device, text) {
 		})
 		return
 	}
-	const result = ns === 'narwal' && method === 'answerUserQuestion'
-		? Promise.resolve().then(() => answerUserQuestion(device, args))
-		: bridge.deps.invoke({ namespace: ns, method, args, peer: device.peer })
+	let result
+	if (ns === 'narwal' && method === 'answerUserQuestion') {
+		result = Promise.resolve().then(() => answerUserQuestion(device, args))
+	} else if (ns === 'narwal' && method === 'getSessionSummaries') {
+		const readList = () => bridge.deps.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, peer: device.peer })
+		result = readSessionSummaries(readList, args.knownRevision)
+	} else if (ns === 'narwal' && method === 'getSessionCursor') {
+		result = bridge.deps.invoke({ namespace: 'session', method: 'projections', args, peer: device.peer })
+			.then(baseline => ({ kind: baseline?.kind, asOfSeq: baseline?.asOfSeq }))
+	} else {
+		result = bridge.deps.invoke({ namespace: ns, method, args, peer: device.peer })
+	}
 	void result.then((value) => {
 		sendResult({ id, ok: true, value })
 	}).catch((error) => {
@@ -113,10 +134,12 @@ async function runStream(bridge, device, id, ns, method, args, revision) {
 		return
 	}
 	let handle = null
+	const { narwalFilter, ...hostArgs } = args
+	const filter = ns === 'session' && method === 'control' ? sessionControlFilter(narwalFilter) : undefined
 	try {
 		handle = ns === 'narwal' && method === 'userQuestionEvents'
 			? bridge.deps.openQuestionEvents(device)
-			: await bridge.deps.stream({ namespace: ns, method, args, peer: device.peer })
+			: await bridge.deps.stream({ namespace: ns, method, args: filter ? hostArgs : args, peer: device.peer })
 	} catch (error) {
 		if (device.activityRevision !== revision) return
 		bridge.send(device, {
@@ -161,7 +184,8 @@ async function runStream(bridge, device, id, ns, method, args, revision) {
 					bridge.send(device, { id, done: true })
 					return
 				}
-				bridge.send(device, { id, item: next?.value })
+				const item = filter ? filter(next?.value) : next?.value
+				if (item !== undefined) bridge.send(device, { id, item })
 			}
 		} catch (error) {
 			if (device.streams.get(id) !== task) return

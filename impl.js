@@ -21,6 +21,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { once } from 'node:events'
 import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
@@ -54,6 +55,7 @@ function readDesktopAccount() {
 		} catch { /* fall through */ }
 		if (!name) name = user || 'desktop'
 		let avatar = null
+		let avatarVersion
 		try {
 			const hex = String(execFileSync('dscl', ['.', '-read', `/Users/${user}`, 'JPEGPhoto'], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 }))
 			/* dscl 输出形如 "JPEGPhoto:" 后跟按空格分组的十六进制,需先剔除标签行与空白 */
@@ -66,10 +68,11 @@ function readDesktopAccount() {
 				const buf = Buffer.from(raw, 'hex')
 				if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) {
 					avatar = `data:image/jpeg;base64,${buf.toString('base64')}`
+					avatarVersion = createHash('sha256').update(buf).digest('hex')
 				}
 			}
 		} catch { /* no avatar configured */ }
-		return { name, user, avatar }
+		return { name, user, avatar, avatarVersion }
 	} catch {
 		return { name: 'desktop', user: '', avatar: null }
 	}
@@ -77,8 +80,10 @@ function readDesktopAccount() {
 
 class NarwalBridge {
 	constructor(ctx, config, deps) {
-		this.account = readDesktopAccount()
-		this.relayAccount = { ...this.account, avatar: null }
+		const { avatarVersion, ...account } = readDesktopAccount()
+		this.account = account
+		this.relayAccount = { ...account, avatar: null }
+		this.lazyAvatarAccount = { ...this.relayAccount, avatarVersion }
 		this.ctx = ctx
 		this.config = config
 		this.deps = deps
@@ -354,7 +359,7 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: transport !== 'relay', desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, desktopId: this.store.getDesktopId(),
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)
@@ -369,7 +374,7 @@ class NarwalBridge {
 		try { device.socket?.close?.() } catch { /* nop */ }
 	}
 
-	setDeviceActive(device, id, active) {
+	setDeviceActive(device, id, active, lazyAvatar) {
 		if (!device.peer || device.tokenId === 'relay' || typeof active !== 'boolean') {
 			this.send(device, { id, ok: false, error: { code: 'narwal/device-role-unavailable', message: 'Device role is unavailable' } })
 			return
@@ -389,7 +394,7 @@ class NarwalBridge {
 		}
 		this.send(device, { id, ok: true, value: { active } })
 		if (changed && active) {
-			const account = device.transport === 'relay' ? this.relayAccount : this.account
+			const account = device.transport === 'relay' ? this.relayAccount : lazyAvatar ? this.lazyAvatarAccount : this.account
 			this.send(device, { event: 'narwal/active', payload: { account } })
 		}
 	}
