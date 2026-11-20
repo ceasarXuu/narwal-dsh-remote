@@ -1,9 +1,6 @@
 /**
  * Narwal Server — host half (protocol v1 bridge, 0.2.0).
  *
- * Cordis plugin running inside the DSH desktop runtime (contract proven in the
- * tarball load experiment: named exports `apply(ctx, config)` + `inject`).
- *
  * Responsibilities:
  *   1. HTTP + ws on config.port; token auth at upgrade (/ws) and on admin routes
  *   2. per-device in-process Peer (owner principal) via ctx.connection.createPeer
@@ -27,8 +24,9 @@ import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { supportsArtifactDownloads } from './artifact-downloads.js'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?workspace-expansion'
-import { handleDeviceFrame } from './bridge-rpc.js?maid-companion'
+import { handleDeviceFrame } from './bridge-rpc.js?artifact-downloads'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
 import { loadRelayV2 } from './relay-v2.js'
@@ -360,6 +358,7 @@ class NarwalBridge {
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), desktopId: this.store.getDesktopId(),
+				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)

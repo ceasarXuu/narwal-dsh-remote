@@ -1,4 +1,5 @@
 import { readApiBalances } from './api-balances.js'
+import { invokeArtifactDownload } from './artifact-downloads.js'
 import { readGitHubProjects } from './github-projects.js'
 import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js'
 import { readSessionSummaries } from './session-summaries.js'
@@ -66,6 +67,18 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	if (ns === 'narwal' && method === 'getWorkspaceExpansion') {
 		sendResult({ id, ok: true, value: readWorkspaceExpansion(bridge) })
+		return
+	}
+	if (ns === 'narwal' && (method === 'getArtifact' || method === 'readArtifact')) {
+		if (!device.transport || !device.peer) {
+			sendResult({ id, ok: false, error: { code: 'narwal/artifact-unavailable', message: '请使用加密配对后下载文件。' } })
+			return
+		}
+		void invokeArtifactDownload(bridge.ctx, method, args).then(value => {
+			sendResult({ id, ok: true, value })
+		}).catch(error => {
+			sendResult({ id, ok: false, error: { code: error.code, message: error.message } })
+		})
 		return
 	}
 	if (ns === 'narwal' && ['getMaid', 'installMaid', 'enableMaid'].includes(method)) {
