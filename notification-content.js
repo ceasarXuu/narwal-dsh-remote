@@ -42,7 +42,7 @@ function assistantPreview(data) {
 	return boundedText(text, MAX_PREVIEW_LENGTH)
 }
 
-export function taskCompletionNotices(ctx, emit) {
+export function taskTurnNotices(ctx, emit) {
 	const lastReplies = new WeakMap()
 	return (session, event) => {
 		if (typeof session?.id !== 'string' || session.header?.origin === 'subagent') return
@@ -55,13 +55,14 @@ export function taskCompletionNotices(ctx, emit) {
 		if (event?.type !== 'turn/end') return
 		const reply = lastReplies.get(session)
 		lastReplies.delete(session)
-		if (event.ignorable || event.data?.reason?.kind !== 'completed') return
+		const outcome = event.data?.reason?.kind
+		if (event.ignorable || (outcome !== 'completed' && outcome !== 'error')) return
 		const sequence = event.seq ?? event.data.turn
 		if (!Number.isSafeInteger(sequence)) return
 		emit({
-			kind: 'task-complete', sessionId: session.id, eventId: String(sequence),
+			kind: outcome === 'completed' ? 'task-complete' : 'task-failed', sessionId: session.id, eventId: String(sequence),
 			...notificationTitles(ctx, session.id, session),
-			preview: reply?.turn === event.data.turn ? reply?.preview : undefined,
+			preview: outcome === 'completed' && reply?.turn === event.data.turn ? reply?.preview : undefined,
 		})
 	}
 }

@@ -25,9 +25,9 @@ import { handleDeviceFrame } from './bridge-rpc.js?push'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
-import { notificationTitles, sendLegacyNotice, taskCompletionNotices } from './notification-content.js?push'
-import { createPushNotifications, observePushQuestions } from './push-notifications.js'
-import { loadRelayV2 } from './relay-v2.js'
+import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?task-actions'
+import { createPushNotifications, listenForPushRequests } from './push-notifications.js?task-actions'
+import { loadRelayV2 } from './relay-v2.js?task-actions'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
@@ -243,11 +243,11 @@ class NarwalBridge {
 				}
 			})
 		}
-		listen('session/event', taskCompletionNotices(this.ctx, payload => {
+		listen('session/event', taskTurnNotices(this.ctx, payload => {
 			this.push?.publish(payload)
-			sendLegacyNotice(this, payload)
+			if (payload.kind === 'task-complete') sendLegacyNotice(this, payload)
 		}), { global: true })
-		if (this.push) listen('user-questions/request', observePushQuestions(this), { global: true, prepend: true })
+		if (this.push) listenForPushRequests(this, listen)
 	}
 
 	refreshQuestionWatcher() {
@@ -337,7 +337,7 @@ class NarwalBridge {
 		const device = {
 			socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId, transport,
 			active, activityRevision: 0, streams: new Map(), pendingUnsub: new Set(), connectedAt: Date.now(),
-			...this.push?.localDevice(tokenRecord.pushForeground),
+			...this.push?.localDevice(tokenRecord.pushForeground, tokenRecord.pushTaskActions),
 		}
 		this.devices.set(sessionId, device)
 		this.refreshQuestionWatcher()

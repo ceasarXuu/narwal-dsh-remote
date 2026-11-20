@@ -7,6 +7,7 @@ const hex = (value, size) => typeof value === 'string' && value.length === size 
 const digest = value => createHash('sha256').update(value).digest('hex')
 const derive = (seed, purpose) => createHmac('sha256', Buffer.from(seed, 'hex')).update(purpose).digest('hex')
 const expiry = 120
+const taskKinds = new Set(['task-complete', 'agent-question', 'task-failed', 'tool-approval'])
 
 function credentials(record) {
 	const { seed } = record
@@ -68,8 +69,9 @@ export class PushNotifications {
 		this.events = events
 	}
 
-	localDevice(foreground) {
-		return typeof foreground === 'boolean' ? { pushLocal: true, pushUntil: foreground ? Date.now() + 15_000 : 0 } : undefined
+	localDevice(foreground, taskActions) {
+		if (typeof foreground !== 'boolean') return
+		return { pushLocal: true, pushTaskActions: taskActions === true, pushUntil: foreground ? Date.now() + 15_000 : 0 }
 	}
 
 	request(binding, suffix, method, token, data) {
@@ -102,7 +104,13 @@ export class PushNotifications {
 		if (method === 'pushPresence') {
 			const record = this.bindings.get(id)
 			if (typeof args.foreground !== 'boolean') return false
-			if (record && !record.enabled && args.registered === true) this.save(new Map(this.bindings).set(id, { ...record, enabled: true }))
+			if (record) {
+				const enabled = record.enabled || args.registered === true
+				const taskActions = device.pushTaskActions
+				if (enabled !== record.enabled || taskActions !== Boolean(record.taskActions)) {
+					this.save(new Map(this.bindings).set(id, { ...record, enabled, taskActions }))
+				}
+			}
 			device.pushUntil = args.foreground ? Date.now() + 15_000 : 0
 			return true
 		}
@@ -114,7 +122,7 @@ export class PushNotifications {
 
 	publish(payload) {
 		if (!payload.eventId || typeof payload.sessionId !== 'string' || payload.sessionId.length > 512
-			|| !['task-complete', 'agent-question'].includes(payload.kind)) return
+			|| !taskKinds.has(payload.kind)) return
 		for (const pair of this.pairings().list()) {
 			if (pair.phoneKey) void this.deliver(pair.id, payload).catch(() => this.log.warn('Push delivery could not be submitted'))
 		}
@@ -122,9 +130,11 @@ export class PushNotifications {
 
 	async deliver(id, payload) {
 		const time = Date.now()
-		const device = [...this.devices()].find(value => value.pushLocal && !value.disposed
-			&& value.tokenId === id && value.pushUntil > time)
+		const connected = [...this.devices()].find(value => value.pushLocal && !value.disposed && value.tokenId === id)
+		const device = connected && connected.pushUntil > time ? connected : undefined
 		let record = this.bindings.get(id)
+		if ((payload.kind === 'tool-approval' || payload.kind === 'task-failed')
+			&& !(connected?.pushTaskActions ?? record?.taskActions)) return
 		if (!record?.enabled && !device) return
 		if (!record) {
 			record = { seed: randomBytes(32).toString('hex'), enabled: false }
@@ -184,24 +194,32 @@ export class PushNotifications {
 	}
 }
 
-export function observePushQuestions(bridge) {
+export function listenForPushRequests(bridge, listen) {
 	const transient = new WeakMap()
-	return (request, next) => {
+	function publish(request, kind, callId) {
 		const session = request.agent?.session
-		const callId = typeof request.wait?.callId === 'string' && request.wait.callId.length <= 512 ? request.wait.callId : undefined
-		if (bridge.push && typeof session?.id === 'string'
-			&& session.header?.origin !== 'subagent' && !request.signal?.aborted
-			&& Array.isArray(request.questions) && request.questions.length
-			&& !request.questions.some(question => question?.intent?.kind === 'approval')) {
-			const eventId = callId || transient.get(request) || randomBytes(16).toString('hex')
-			if (!callId) transient.set(request, eventId)
-			if (!bridge.stopping) bridge.push.publish({
-				kind: 'agent-question', sessionId: session.id, callId, eventId,
-				...notificationTitles(bridge.ctx, session.id, session),
-			})
+		if (bridge.stopping || typeof session?.id !== 'string' || session.header?.origin === 'subagent' || request.signal?.aborted) return
+		const eventId = callId || transient.get(request) || randomBytes(16).toString('hex')
+		if (!callId) transient.set(request, eventId)
+		bridge.push.publish({
+			kind, sessionId: session.id, callId, eventId,
+			...notificationTitles(bridge.ctx, session.id, session),
+		})
+	}
+	const options = { global: true, prepend: true }
+	listen('approval/request', (request, next) => {
+		publish(request, 'tool-approval')
+		return next()
+	}, options)
+	listen('user-questions/request', (request, next) => {
+		if (Array.isArray(request.questions) && request.questions.length) {
+			const approval = request.questions.some(question => question?.intent?.kind === 'approval')
+			const callId = request.wait?.callId
+			publish(request, approval ? 'tool-approval' : 'agent-question',
+				!approval && typeof callId === 'string' && callId.length <= 512 ? callId : undefined)
 		}
 		return next()
-	}
+	}, options)
 }
 
 function origin(value) {
