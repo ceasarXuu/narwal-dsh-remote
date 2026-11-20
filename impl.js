@@ -356,6 +356,7 @@ class NarwalBridge {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
+				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)
