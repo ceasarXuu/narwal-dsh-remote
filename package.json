@@ -60,6 +60,7 @@
     "traffic-usage.js",
     "session-summaries.js",
     "session-control-filter.js",
+    "workspace-expansion.js",
     "user-questions.js",
     "cordis.patch.yml",
     "icon.svg",
@@ -94,6 +95,7 @@
       "traffic-usage.js",
       "session-summaries.js",
       "session-control-filter.js",
+      "workspace-expansion.js",
       "user-questions.js",
       "vendor/toqr.mjs"
     ]

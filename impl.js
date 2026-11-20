@@ -27,8 +27,8 @@ import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?tailnet-pairing'
-import { handleDeviceFrame } from './bridge-rpc.js?relay-v2'
+import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?workspace-expansion'
+import { handleDeviceFrame } from './bridge-rpc.js?workspace-expansion'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
@@ -359,7 +359,7 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, desktopId: this.store.getDesktopId(),
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)

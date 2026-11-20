@@ -2,6 +2,7 @@ import { readApiBalances } from './api-balances.js'
 import { readGitHubProjects } from './github-projects.js'
 import { readSessionSummaries } from './session-summaries.js'
 import { sessionControlFilter } from './session-control-filter.js'
+import { readWorkspaceExpansion } from './workspace-expansion.js'
 import { answerUserQuestion } from './user-questions.js?passive-notices'
 
 function streamLog(event, details) {
@@ -60,6 +61,10 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	if (ns === 'narwal' && method === 'getTrafficUsage') {
 		bridge.send(device, { id, ok: true, value: bridge.traffic.snapshot() }, { meter: false, unary: true })
+		return
+	}
+	if (ns === 'narwal' && method === 'getWorkspaceExpansion') {
+		sendResult({ id, ok: true, value: readWorkspaceExpansion(bridge) })
 		return
 	}
 	if (ns === 'narwal' && method === 'getDesktopAvatar') {

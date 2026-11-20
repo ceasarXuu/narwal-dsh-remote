@@ -4,6 +4,7 @@ import { networkInterfaces } from 'node:os'
 
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
 import { PAIR_ID, publicPairing } from './relay-pairing-store.js'
+import { MAX_WORKSPACE_EXPANSION_BYTES, publishWorkspaceExpansion } from './workspace-expansion.js'
 
 const MAX_PAIRING_HOSTS = 3
 const DNS_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
@@ -95,11 +96,18 @@ function replyJson(res, extra, body, status = 200) {
 	res.end(JSON.stringify(body))
 }
 
-function readBody(req) {
+function readBody(req, limit = Infinity) {
 	return new Promise((resolve, reject) => {
 		const chunks = []
-		req.on('data', (c) => chunks.push(c))
-		req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+		let size = 0
+		req.on('data', (chunk) => {
+			size += chunk.length
+			if (size <= limit) chunks.push(chunk)
+		})
+		req.on('end', () => {
+			if (size > limit) reject(new RangeError('Request body too large'))
+			else resolve(Buffer.concat(chunks).toString('utf8'))
+		})
 		req.on('error', reject)
 	})
 }
@@ -200,6 +208,19 @@ export async function handlePanelRequest(bridge, req, res) {
 		return
 	}
 	const localPanel = isTrustedLocal(req) && /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(req.headers?.host ?? '')
+	if (req.method === 'POST' && url.pathname === '/workspace-expansion') {
+		if (!localPanel) return res.writeHead(403, corsHeaders).end()
+		try {
+			const value = JSON.parse(await readBody(req, MAX_WORKSPACE_EXPANSION_BYTES))
+			if (bridge.stopping || res.destroyed) return
+			publishWorkspaceExpansion(bridge, value)
+			return res.writeHead(204, corsHeaders).end()
+		} catch (error) {
+			const code = error instanceof RangeError ? 413 : error instanceof TypeError || error instanceof SyntaxError ? 400 : 503
+			if (code === 503) bridge.log.warn('Could not save workspace expansion: %s', error?.message)
+			return res.writeHead(code, corsHeaders).end()
+		}
+	}
 	if (req.method === 'GET' && ['/v2/qr.svg', '/v2/pairing-uri'].includes(url.pathname)) {
 		try { await v2PairingRequest(bridge, req, res, url, corsHeaders, localPanel) }
 		catch { if (!res.headersSent) res.writeHead(500).end() }

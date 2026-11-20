@@ -220,16 +220,7 @@ window.__ModuleLoader__.load({
 		function NarwalSection(props) {
 			const { t, form } = props
 			const subscribe = useCallback(listener => form?.subscribe?.(listener) ?? (() => {}), [form])
-			const getPort = useCallback(() => {
-				let snapshot
-				try {
-					snapshot = typeof form?.getSnapshot === 'function' ? form.getSnapshot() : form?.get?.()
-				} catch {}
-				if (snapshot?.status === 'loading') return null
-				const value = snapshot?.value?.port ?? snapshot?.port
-				const port = typeof value === 'number' || typeof value === 'string' ? Number(value) : 0
-				return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 48317
-			}, [form])
+			const getPort = useCallback(() => readBridgePort(form), [form])
 			const port = useSyncExternalStore(subscribe, getPort, getPort)
 
 			return React.createElement('div', { style: { maxWidth: 560 } },
@@ -390,9 +381,76 @@ window.__ModuleLoader__.load({
 			return '127.0.0.1'
 		})()
 
+		function readBridgePort(form) {
+			let snapshot
+			try {
+				snapshot = typeof form?.getSnapshot === 'function' ? form.getSnapshot() : form?.get?.()
+			} catch {}
+			if (snapshot?.status === 'loading') return null
+			const value = snapshot?.value?.port ?? snapshot?.port
+			const port = typeof value === 'number' || typeof value === 'string' ? Number(value) : 0
+			return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 48317
+		}
+
+		function mirrorWorkspaceExpansion(slots, form) {
+			if (globalThis.location?.protocol !== 'dsh-app:') return
+			const slot = 'sidebar.workspaces'
+			const abort = new globalThis.AbortController()
+			let handle, view, unsubscribeView, published, retry
+			let sending = false
+			let delay = 1000
+			async function publish() {
+				if (sending || abort.signal.aborted) return
+				clearTimeout(retry)
+				const expanded = view?.getSnapshot()?.groupExpansion
+				const port = readBridgePort(form)
+				if (!expanded || port === null) return
+				const body = JSON.stringify({ expanded })
+				const key = `${port}:${body}`
+				if (key === published) return
+				sending = true
+				try {
+					const response = await fetch(`http://127.0.0.1:${port}/workspace-expansion`, {
+						method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: abort.signal,
+					})
+					if (response.ok || [400, 403, 413].includes(response.status)) published = key
+				} catch { /* Retry when the bridge comes back. */ }
+				sending = false
+				if (abort.signal.aborted) return
+				if (published === key) {
+					delay = 1000
+					void publish()
+				} else {
+					retry = setTimeout(publish, delay)
+					delay = Math.min(delay * 2, 30_000)
+				}
+			}
+			function bind() {
+				const next = slots.entries(slot).find(entry => entry.store?.spec?.persist === 'dsh.workspace.view.v5')?.store
+				if (next === handle) return
+				unsubscribeView?.()
+				handle = next
+				// DSH's registration returns its existing view store, including saved preferences.
+				view = handle?.create()
+				unsubscribeView = view?.subscribe(publish)
+				void publish()
+			}
+			const unsubscribeSlots = slots.subscribe(slot, bind)
+			const unsubscribeForm = form?.subscribe?.(publish)
+			bind()
+			return () => {
+				abort.abort()
+				clearTimeout(retry)
+				unsubscribeView?.()
+				unsubscribeForm?.()
+				unsubscribeSlots()
+			}
+		}
+
 		function apply(ctx) {
 			ctx.effect(() => ctx.locale.register(NS, { en, zh }))
 			const form = ctx.configForms.get('narwal-server')
+			ctx.effect(() => mirrorWorkspaceExpansion(ctx.slots, form))
 			/** single-path write; returns true on accepted write */
 			const write = (key, value) => {
 				try { void form.set(key, value); return true } catch { return false }
