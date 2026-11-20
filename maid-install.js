@@ -101,8 +101,10 @@ export function createMaidInstaller({ getManager, getConversation, directory, lo
 						: await manager.installBundle(await stageArchive(directory), {
 							enabled: true, registry: REGISTRY, expected: { name: NAME, version: VERSION },
 						})
-					if (result?.application === 'restart-required') outcome = { kind: 'restart' }
-					else if (result?.application === 'applied') bootDeadline = Date.now() + BOOT_TIMEOUT
+					if (result?.application === 'restart-required' || (result?.application === 'applied' && kind === 'update-required')) {
+						// An enabled replacement can be persisted while DSH still holds the old module.
+						outcome = { kind: 'restart' }
+					} else if (result?.application === 'applied') bootDeadline = Date.now() + BOOT_TIMEOUT
 					else {
 						outcome = failure
 						log.warn('Maid setup did not apply: %s', result?.error?.code ?? 'unknown')
