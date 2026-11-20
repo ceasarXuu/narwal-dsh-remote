@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import z from '@deepseek-ai/schemastery'
 
 import { createRuntimeUpdates } from './runtime-updates.js'
 
@@ -11,6 +12,10 @@ const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.u
 const STATUS_DIR = join(process.env.NARWAL_PROFILE_HOME || process.env.DSH_HOME || join(homedir(), '.dsh'), 'narwal-server')
 const FIRST_CHECK_DELAY = 30_000
 const UPDATE_INTERVAL = 6 * 60 * 60_000
+
+export const Config = z.object({
+	port: z.union([z.number(), z.string()]).default(48317).disabled().volatile(),
+})
 
 function writeStatus(status) {
 	try {
@@ -38,6 +43,10 @@ export function apply(ctx, config) {
 	let updateTimer
 	let rejectedVersion
 	let previousRelease
+	const configuredPort = () => {
+		const port = typeof config?.port?.get === 'function' ? config.port.get() : config?.port
+		return Number(port) || 48317
+	}
 
 	const report = () => writeStatus({
 		ok: Boolean(current),
@@ -60,18 +69,18 @@ export function apply(ctx, config) {
 		if (typeof module.start !== 'function') throw new Error('Narwal runtime has no start function')
 		return { ...release, start: module.start }
 	}
-	const start = async (release) => {
+	const start = async (release, port = configuredPort()) => {
 		const transport = await ws
 		if (stopped) return
 		let dispose
 		try {
-			const handle = await release.start(ctx, config, {
+			const handle = await release.start(ctx, { ...config, port }, {
 				ws: transport,
 				registerStop(stop) { dispose = stop },
 			})
 			if (typeof handle?.stop !== 'function') throw new Error('Narwal runtime did not return a stop function')
 			if (stopped) await handle.stop()
-			else current = { ...release, stop: () => handle.stop() }
+			else current = { ...release, port, stop: () => handle.stop() }
 		} catch (error) {
 			try { await dispose?.() } catch (stopError) { log('failed runtime could not stop', stopError) }
 			throw error
@@ -85,7 +94,7 @@ export function apply(ctx, config) {
 		try {
 			await start(next)
 		} catch (error) {
-			if (!stopped && previous) await start(previous)
+			if (!stopped && previous) await start(previous, previous.port)
 			throw error
 		}
 	}
@@ -114,6 +123,13 @@ export function apply(ctx, config) {
 			}
 			report()
 		}
+	})
+	ctx.on('loader/volatile-update', () => {
+		void enqueue(async () => {
+			if (!current || current.port === configuredPort()) return
+			await switchRuntime(current)
+			if (!stopped) report()
+		})
 	})
 
 	async function checkForUpdate() {
@@ -172,13 +188,16 @@ export function apply(ctx, config) {
 		}
 	}
 
-	return () => {
+	return async () => {
 		stopped = true
 		clearTimeout(debounce)
 		clearTimeout(updateTimer)
 		watching?.close()
-		if (current) void Promise.resolve(current.stop()).catch(error => log('bridge stop failed', error))
+		await queue
+		const previous = current
 		current = undefined
+		try { await previous?.stop() }
+		catch (error) { log('bridge stop failed', error) }
 	}
 }
 

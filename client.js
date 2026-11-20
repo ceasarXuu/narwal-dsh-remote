@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
 		var module = { exports: {} };
 		var exports = module.exports;
 		const React = require('react')
-		const { useState, useCallback, useEffect, useRef } = React
+		const { useState, useCallback, useEffect, useRef, useSyncExternalStore } = React
 
 		/* ------------------------------------------------------------------ */
 		/* locale(inline dictionaries —— official session-log precedent)       */
@@ -219,9 +219,27 @@ window.__ModuleLoader__.load({
 
 		function NarwalSection(props) {
 			const { t, form } = props
-			let snapshot = null
-			try { snapshot = (typeof form.getSnapshot === 'function' ? form.getSnapshot() : form.get?.()) } catch {}
-			const port = Number(snapshot?.value?.port) || 48317
+			const subscribe = useCallback(listener => form?.subscribe?.(listener) ?? (() => {}), [form])
+			const getPort = useCallback(() => {
+				let snapshot
+				try {
+					snapshot = typeof form?.getSnapshot === 'function' ? form.getSnapshot() : form?.get?.()
+				} catch {}
+				if (snapshot?.status === 'loading') return null
+				const value = snapshot?.value?.port ?? snapshot?.port
+				const port = typeof value === 'number' || typeof value === 'string' ? Number(value) : 0
+				return Number.isInteger(port) && port > 0 && port <= 65535 ? port : 48317
+			}, [form])
+			const port = useSyncExternalStore(subscribe, getPort, getPort)
+
+			return React.createElement('div', { style: { maxWidth: 560 } },
+				React.createElement('p', { style: { ...sub, marginTop: 0, marginBottom: 16 } }, t('sectionDesc')),
+				port === null
+					? React.createElement('div', { style: sub }, t('unavailable'))
+					: React.createElement(NarwalPairings, { key: port, t, port }))
+		}
+
+		function NarwalPairings({ t, port }) {
 			const [tokens, setTokens] = useState(null)
 			const [maxPairings, setMaxPairings] = useState(null)
 			const [online, setOnline] = useState([])
@@ -309,8 +327,7 @@ window.__ModuleLoader__.load({
 			}
 			const full = maxPairings !== null && (tokens?.length ?? 0) >= maxPairings
 
-			return React.createElement('div', { style: { maxWidth: 560 } },
-				React.createElement('p', { style: { ...sub, marginTop: 0, marginBottom: 16 } }, t('sectionDesc')),
+			return React.createElement(React.Fragment, null,
 				tokens === null
 					? React.createElement('div', { style: sub }, t('unavailable'))
 					: tokens.length === 0
