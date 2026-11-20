@@ -10,7 +10,7 @@ async function sendOutcome(connection, peer, clientId, eventId, outcome, signal)
 	const request = new Request(`http://narwal.local/api/${ENDPOINT}`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: ENDPOINT, payload: { clientId, eventId, outcome } }),
+		body: JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method: ENDPOINT, payload: { args: { clientId, eventId, outcome } } }),
 		signal,
 	})
 	const response = await connection.fetch(request, peer)

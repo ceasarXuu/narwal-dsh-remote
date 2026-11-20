@@ -3,7 +3,7 @@ import { readGitHubProjects } from './github-projects.js'
 import { readSessionSummaries } from './session-summaries.js'
 import { sessionControlFilter } from './session-control-filter.js'
 import { readWorkspaceExpansion } from './workspace-expansion.js'
-import { answerUserQuestion } from './user-questions.js?passive-notices'
+import { answerUserQuestion } from './user-questions.js?event-result-args'
 
 function streamLog(event, details) {
 	try {

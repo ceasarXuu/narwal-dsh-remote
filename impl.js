@@ -28,14 +28,14 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?workspace-expansion'
-import { handleDeviceFrame } from './bridge-rpc.js?maid'
+import { handleDeviceFrame } from './bridge-rpc.js?event-result-args'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { createMaidInstaller } from './maid-install.js'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
-import { openQuestionEvents, watchPendingQuestions } from './user-questions.js?passive-notices'
+import { openQuestionEvents, watchPendingQuestions } from './user-questions.js?event-result-args'
 const SESSION_EVENTS = ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']
 
 /**
