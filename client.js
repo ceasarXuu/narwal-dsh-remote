@@ -6,9 +6,6 @@ window.__ModuleLoader__.load({
 		const React = require('react')
 		const { useState, useCallback, useEffect, useRef, useSyncExternalStore } = React
 
-		/* ------------------------------------------------------------------ */
-		/* locale(inline dictionaries —— official session-log precedent)       */
-		/* ------------------------------------------------------------------ */
 		const en = {
 			nav: 'Narwal',
 			sectionDesc: 'Pair the Narwal iOS app to drive this DeepSeek Harness from your phone.',
@@ -38,6 +35,12 @@ window.__ModuleLoader__.load({
 			trafficUnavailable: 'Traffic usage is unavailable.',
 			trafficDetails: 'Daily breakdown',
 			trafficDate: 'Date',
+			shareWeb: 'Share local web',
+			webPort: 'Local HTTP port',
+			webConfirm: 'Share for 30 minutes',
+			webUntil: 'Until',
+			webRevoke: 'Stop sharing',
+			cancel: 'Cancel',
 		}
 		const zh = {
 			nav: 'Narwal',
@@ -68,11 +71,14 @@ window.__ModuleLoader__.load({
 			trafficUnavailable: '暂时无法读取流量数据。',
 			trafficDetails: '按日明细',
 			trafficDate: '日期',
+			shareWeb: '共享本地网页',
+			webPort: '本机 HTTP 端口',
+			webConfirm: '共享 30 分钟',
+			webUntil: '有效至',
+			webRevoke: '停止共享',
+			cancel: '取消',
 		}
 
-		/* ------------------------------------------------------------------ */
-		/* styles(inline,theme-agnostic)                                      */
-		/* ------------------------------------------------------------------ */
 		const border = '0.5px solid var(--dsw-alias-border-l2, #ddd)'
 		const sub = { color: 'var(--dsw-alias-label-secondary, #888)', fontSize: 12, lineHeight: '18px' }
 		const title = { fontSize: 14, lineHeight: '20px', fontWeight: 600 }
@@ -90,9 +96,6 @@ window.__ModuleLoader__.load({
 				: `${trafficNumber.format(megabytes)} MB`
 		}
 
-		/* ------------------------------------------------------------------ */
-		/* components                                                          */
-		/* ------------------------------------------------------------------ */
 		function QrBlock(props) {
 			const { token, port, t } = props
 			return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '8px 0 20px' } },
@@ -129,8 +132,32 @@ window.__ModuleLoader__.load({
 				name, React.createElement('span', { style: { ...sub, fontWeight: 400 } }, '\u270E'))
 		}
 
+		function LocalWebSharing({ token, onUpdate, t }) {
+			const [draft, setDraft] = useState(null)
+			const [busy, setBusy] = useState(false)
+			const port = Number(draft)
+			const change = async (action) => {
+				setBusy(true)
+				try { if (await onUpdate({ action, id: token.id, ...(action === 'grant' ? { port } : {}) })) setDraft(null) }
+				finally { setBusy(false) }
+			}
+			const style = { display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px 12px 36px', flexWrap: 'wrap' }
+			if (token.localWeb) return React.createElement('div', { style },
+				React.createElement('span', { style: sub }, `localhost:${token.localWeb.port} · ${t('webUntil')} ${new Date(token.localWeb.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`),
+				React.createElement('button', { type: 'button', style: btn, disabled: busy, onClick: () => void change('revoke') }, t('webRevoke')))
+			if (draft === null) return React.createElement('div', { style },
+				React.createElement('button', { type: 'button', style: btn, onClick: () => setDraft('') }, t('shareWeb')))
+			return React.createElement('form', { style, onSubmit: event => { event.preventDefault(); void change('grant') } },
+				React.createElement('label', { style: sub }, t('webPort'), ' ', React.createElement('input', {
+					type: 'number', min: 1, max: 65535, required: true, value: draft, autoFocus: true, style: { ...btn, width: 64 },
+					onChange: event => setDraft(event.target.value),
+				})),
+				React.createElement('button', { type: 'submit', style: btn, disabled: busy }, t('webConfirm')),
+				React.createElement('button', { type: 'button', style: btn, disabled: busy, onClick: () => setDraft(null) }, t('cancel')))
+		}
+
 		function DeviceRow(props) {
-			const { token, online, open, first, port, t, onToggle, onRemove, onRename } = props
+			const { token, online, open, first, port, t, onToggle, onRemove, onRename, onWebUpdate } = props
 			return React.createElement('div', { style: first ? null : { borderTop: border } },
 				React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px' } },
 					React.createElement('span', { style: { width: 8, height: 8, borderRadius: 4, flex: 'none', background: online ? '#2f9e5e' : '#c4c4c4' } }),
@@ -139,7 +166,8 @@ window.__ModuleLoader__.load({
 						React.createElement('div', { style: sub }, online ? t('online') : token.expiresAt ? t('waitingForScan') : t('offline'))),
 					(token.protocol !== 2 || token.expiresAt) ? React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')) : null,
 					React.createElement('button', { style: btnDanger, onClick: onRemove }, t('remove'))),
-				open && (token.protocol !== 2 || token.expiresAt) ? React.createElement(QrBlock, { token, port, t }) : null)
+				open && (token.protocol !== 2 || token.expiresAt) ? React.createElement(QrBlock, { token, port, t }) : null,
+				Object.hasOwn(token, 'localWeb') ? React.createElement(LocalWebSharing, { token, onUpdate: onWebUpdate, t }) : null)
 		}
 
 		function TrafficSummary({ label, color, bytes }) {
@@ -195,10 +223,6 @@ window.__ModuleLoader__.load({
 						React.createElement('tbody', null, rows))))
 		}
 
-		/*
-		 * 渲染错误边界。设置面板一旦抛错，整个 slot 会渲染成空白 ——
-		 * 之前 hooks 漏解构就是这么白屏的，日志里什么都看不到。
-		 */
 		class SectionBoundary extends React.Component {
 			constructor(props) {
 				super(props)
@@ -273,11 +297,10 @@ window.__ModuleLoader__.load({
 				return () => { stopRef.current = true; clearInterval(timer) }
 			}, [refresh])
 
-			/* 本机面板免 secret：host 端对 loopback + DSH Origin 放行 */
-			const post = useCallback(async (payload) => {
+			const post = useCallback(async (payload, path = '/tokens') => {
 				const qs = secretRef.current ? `?token=${encodeURIComponent(secretRef.current)}` : ''
 				try {
-					const res = await fetch(`${base}/tokens${qs}`, {
+					const res = await fetch(`${base}${path}${qs}`, {
 						method: 'POST',
 						headers: { 'content-type': 'application/json' },
 						body: JSON.stringify(payload)
@@ -288,7 +311,7 @@ window.__ModuleLoader__.load({
 						return null
 					}
 					setFailed(null)
-					return result
+					return res.status === 204 ? true : result
 				} catch {
 					setFailed('failed')
 					return null
@@ -316,6 +339,11 @@ window.__ModuleLoader__.load({
 				if (openId === token.id) setOpenId(null)
 				await refresh()
 			}
+			const updateWeb = async (payload) => {
+				const result = await post(payload, '/local-web')
+				if (result) await refresh()
+				return result
+			}
 			const full = maxPairings !== null && (tokens?.length ?? 0) >= maxPairings
 
 			return React.createElement(React.Fragment, null,
@@ -341,7 +369,7 @@ window.__ModuleLoader__.load({
 									open: openId === tok.id,
 									onToggle: () => setOpenId(openId === tok.id ? null : tok.id),
 									onRemove: () => { void remove(tok) },
-					onRename: (id, label) => { void rename(id, label) }
+									onRename: (id, label) => { void rename(id, label) }, onWebUpdate: updateWeb,
 								})))),
 				failed && !(full && failed === 'pairingLimit') ? React.createElement('div', { style: { ...sub, color: '#e5484d', marginTop: 10 } }, t(failed)) : null,
 				React.createElement(TrafficSection, { traffic, t })
@@ -362,17 +390,9 @@ window.__ModuleLoader__.load({
 			})
 		}
 
-		/* ------------------------------------------------------------------ */
-		/* activation —— { inject, apply }(official settings.*  precedent)     */
-		/* ------------------------------------------------------------------ */
 		const inject = ['slots', 'locale', 'configForms']
 		const NS = 'settings.narwal'
 
-		/**
-		 * 桥的访问主机。
-		 * Electron 里页面可能是 dsh-app://app，此时 bridgeHost 是 "app"，
-		 * 拼出来的 http://app:48318 无法解析 —— 回退到 127.0.0.1。
-		 */
 		const bridgeHost = (() => {
 			try {
 				const h = globalThis.location?.hostname ?? ''

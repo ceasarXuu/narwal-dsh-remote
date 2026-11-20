@@ -10,11 +10,6 @@
  *   6. pairing tokens: durable plugin-owned file store under $DSH_HOME
  *                      (config doc page only holds visual params now)
  *   7. routes        : /qr.svg (pairing QR), /stats (devices), /tokens (admin)
- *
- * Wire frames (JSON):
- *   client→server { id, ns, method, args, stream? } / { id, unsubscribe: true }
- *   server→client { event:'hello', payload } | { id, ok, value } | { id, ok:false, error }
- *   server→client { id, item } … { id, done } | { event, payload }
  */
 
 import { execFileSync } from 'node:child_process'
@@ -25,9 +20,10 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
-import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?workspace-expansion'
-import { handleDeviceFrame } from './bridge-rpc.js?artifact-downloads'
+import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?local-web'
+import { handleDeviceFrame } from './bridge-rpc.js?local-web'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
+import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
@@ -198,6 +194,7 @@ class NarwalBridge {
 	disposeAll() {
 		if (this.stopping) return this.stopTask
 		this.stopping = true
+		closeAllLocalWeb(this)
 		this.watchPendingQuestions(false)
 		this.stopTask = new Promise((resolve) => {
 			if (!this.server) {
@@ -357,7 +354,7 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
 			},
 		})
@@ -365,6 +362,7 @@ class NarwalBridge {
 	}
 
 	teardown(device) {
+		closeLocalWebDevice(this, device)
 		for (const [id, task] of device.streams) this.disposeStream(device, id, task)
 		device.streams.clear()
 		try { device.peer?.dispose?.() } catch { /* idempotent */ }
@@ -383,6 +381,7 @@ class NarwalBridge {
 			device.active = active
 			device.activityRevision++
 			if (!active) {
+				closeLocalWebDevice(this, device)
 				for (const [streamId, task] of device.streams) {
 					device.streams.delete(streamId)
 					this.disposeStream(device, streamId, task)

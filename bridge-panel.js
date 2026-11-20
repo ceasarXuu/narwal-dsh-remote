@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { isIPv4 } from 'node:net'
 import { networkInterfaces } from 'node:os'
 
+import { grantLocalWeb, localWebStatus, revokeLocalWeb } from './local-web.js'
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
 import { PAIR_ID, publicPairing } from './relay-pairing-store.js'
 import { MAX_WORKSPACE_EXPANSION_BYTES, publishWorkspaceExpansion } from './workspace-expansion.js'
@@ -81,6 +82,29 @@ function isTrustedLocal(req) {
 	if (/^dsh-app:\/\//.test(origin)) return true
 	if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(origin)) return true
 	return false
+}
+
+function isLocalWebPanel(bridge, origin) {
+	if (!origin || origin === 'dsh-app://app') return true
+	const port = bridge.ctx.get('webServer')?.port
+	return ['127.0.0.1', '[::1]', 'localhost'].some(host => origin === `http://${host}:${port}`)
+}
+
+async function updateLocalWeb(bridge, req, res, corsHeaders) {
+	if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] ?? '')) return res.writeHead(415, corsHeaders).end()
+	try {
+		const { action, id, port } = JSON.parse(await readBody(req, 768))
+		if (bridge.stopping || res.destroyed) return
+		if (typeof id !== 'string' || !PAIR_ID.test(id)) return res.writeHead(400, corsHeaders).end()
+		if (action === 'grant') return replyJson(res, corsHeaders, grantLocalWeb(bridge, id, port))
+		if (action === 'revoke') {
+			revokeLocalWeb(bridge, id)
+			return res.writeHead(204, corsHeaders).end()
+		}
+		return res.writeHead(400, corsHeaders).end()
+	} catch (error) {
+		return replyJson(res, corsHeaders, { error: error?.code ?? 'invalid-request' }, error instanceof RangeError ? 413 : 400)
+	}
 }
 
 function auditLine(ctx, event, details) {
@@ -208,6 +232,11 @@ export async function handlePanelRequest(bridge, req, res) {
 		return
 	}
 	const localPanel = isTrustedLocal(req) && /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(req.headers?.host ?? '')
+	const localWebPanel = localPanel && isLocalWebPanel(bridge, origin)
+	if (req.method === 'POST' && url.pathname === '/local-web') {
+		if (!localWebPanel) return res.writeHead(403, corsHeaders).end()
+		return updateLocalWeb(bridge, req, res, corsHeaders)
+	}
 	if (req.method === 'POST' && url.pathname === '/workspace-expansion') {
 		if (!localPanel) return res.writeHead(403, corsHeaders).end()
 		try {
@@ -328,7 +357,9 @@ export async function handlePanelRequest(bridge, req, res) {
 			if (req.method === 'GET') {
 				replyJson(res, corsHeaders, {
 					pairHost: pairHosts(bridge)[0],
-					tokens: [...bridge.store.list().map(panelToken), ...(v2?.pairings.list().map(publicPairing) ?? [])],
+				tokens: [...bridge.store.list().map(panelToken), ...(v2?.pairings.list().map(record => ({
+					...publicPairing(record), ...(localWebPanel && record.phoneKey ? { localWeb: localWebStatus(bridge, record.id) } : {}),
+				})) ?? [])],
 					maxPairings: MAX_PAIRINGS,
 				})
 				return
@@ -369,6 +400,7 @@ export async function handlePanelRequest(bridge, req, res) {
 			}
 			if (body?.action === 'revoke' && typeof body?.id === 'string') {
 				if (v2?.pairings.list().some(record => record.id === body.id)) {
+					revokeLocalWeb(bridge, body.id)
 					v2.revoke(body.id)
 					return replyJson(res, corsHeaders, { ok: true })
 				}

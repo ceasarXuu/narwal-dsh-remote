@@ -1,6 +1,7 @@
 import { readApiBalances } from './api-balances.js'
 import { invokeArtifactDownload } from './artifact-downloads.js'
 import { readGitHubProjects } from './github-projects.js'
+import { invokeLocalWeb, LOCAL_WEB_METHODS } from './local-web.js'
 import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js'
 import { readSessionSummaries } from './session-summaries.js'
 import { sessionControlFilter } from './session-control-filter.js'
@@ -67,6 +68,16 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	if (ns === 'narwal' && method === 'getWorkspaceExpansion') {
 		sendResult({ id, ok: true, value: readWorkspaceExpansion(bridge) })
+		return
+	}
+	if (ns === 'narwal' && LOCAL_WEB_METHODS.has(method)) {
+		void invokeLocalWeb(bridge, device, method, args).then(value => {
+			sendResult({ id, ok: true, value })
+		}).catch(error => {
+			const known = typeof error?.code === 'string' && error.code.startsWith('narwal/local-web-')
+			sendResult({ id, ok: false, error: known ? { code: error.code, message: error.message }
+				: { code: 'narwal/local-web-unavailable', message: '桌面本机网页暂时无法访问。' } })
+		})
 		return
 	}
 	if (ns === 'narwal' && (method === 'getArtifact' || method === 'readArtifact')) {
