@@ -4,12 +4,14 @@ import { cpSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeF
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MAID_ARCHIVE, verifyMaidArchive } from '../maid-install.js'
 
 const src = fileURLToPath(new URL('../', import.meta.url))
 const dest = resolve(process.argv[2] ?? tmpdir())
 const staging = mkdtempSync(join(tmpdir(), 'narwal-dsh-pack-'))
 const pkg = JSON.parse(readFileSync(join(src, 'package.json'), 'utf8'))
 const noiseDirectory = process.env.NARWAL_NOISE_DIR
+const maidPackage = process.env.NARWAL_MAID_PACKAGE
 
 function stageNoiseRuntime(directory) {
   if (!directory.trim()) throw new Error('NARWAL_NOISE_DIR must point to a built Narwal Noise Node runtime')
@@ -46,6 +48,13 @@ try {
     cpSync(join(src, file), output)
   }
   if (noiseDirectory !== undefined) stageNoiseRuntime(noiseDirectory)
+  if (maidPackage !== undefined) {
+    if (noiseDirectory === undefined) throw new Error('NARWAL_MAID_PACKAGE is only supported in private Narwal packages')
+    const bytes = readFileSync(maidPackage)
+    verifyMaidArchive(bytes)
+    writeFileSync(join(staging, MAID_ARCHIVE), bytes)
+    pkg.files.push(MAID_ARCHIVE)
+  }
 
   // Preserve module paths used by DSH and the host hot reloader.
   const runtimeFiles = ['index.js', 'runtime-updates.js', 'client.js', ...pkg.narwalRuntime.files]

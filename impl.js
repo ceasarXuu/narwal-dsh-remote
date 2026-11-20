@@ -28,14 +28,14 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?workspace-expansion'
-import { handleDeviceFrame } from './bridge-rpc.js?workspace-expansion'
+import { handleDeviceFrame } from './bridge-rpc.js?maid'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
+import { createMaidInstaller } from './maid-install.js'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
 import { openQuestionEvents, watchPendingQuestions } from './user-questions.js?passive-notices'
-
 const SESSION_EVENTS = ['api-session/added', 'api-session/removed', 'api-session/status', 'api-session/activity', 'api-session/error']
 
 /**
@@ -359,7 +359,7 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), desktopId: this.store.getDesktopId(),
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)
@@ -443,8 +443,8 @@ async function build(ctx, config, runtime) {
 		invoke: (request) => gateway?.invoke?.(request),
 		stream: (request) => gateway?.stream?.(request),
 		openQuestionEvents: (device) => openQuestionEvents(gateway, questionRpc, device),
-		githubProjectsInstaller: createGitHubProjectsInstaller(() => ctx.get('pluginManager')),
-		store,
+		githubProjectsInstaller: createGitHubProjectsInstaller(() => ctx.get('pluginManager')), store,
+		maidInstaller: createMaidInstaller({ getManager: () => ctx.get('pluginManager'), getConversation: () => ctx.get('maidConversation'), directory: store.dir, log: ctx.logger('narwal-server') }),
 	})
 	runtime?.registerStop?.(() => bridge.disposeAll())
 	try {

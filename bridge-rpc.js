@@ -67,6 +67,18 @@ export function handleDeviceFrame(bridge, device, text) {
 		sendResult({ id, ok: true, value: readWorkspaceExpansion(bridge) })
 		return
 	}
+	if (ns === 'narwal' && ['getMaid', 'installMaid', 'enableMaid'].includes(method)) {
+		if (!device.transport || !device.peer) {
+			sendResult({ id, ok: true, value: { kind: 'unavailable' } })
+			return
+		}
+		const installer = bridge.deps.maidInstaller
+		const task = method === 'getMaid' ? installer.availability(args.refresh === true) : installer.start(method === 'enableMaid')
+		void task.then(value => sendResult({ id, ok: true, value })).catch(() => {
+			sendResult({ id, ok: true, value: { kind: 'failed' } })
+		})
+		return
+	}
 	if (ns === 'narwal' && method === 'getDesktopAvatar') {
 		if (!device.peer || device.transport === 'relay' || device.socket === bridge.relay?.socket) {
 			sendResult({ id, ok: true, value: { avatar: null } })
