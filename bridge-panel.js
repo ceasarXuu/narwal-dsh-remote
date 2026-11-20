@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { isIPv4 } from 'node:net'
 import { networkInterfaces } from 'node:os'
 
-import { grantLocalWeb, localWebStatus, revokeLocalWeb } from './local-web.js'
+import { grantLocalWeb, localWebStatus, revokeLocalWeb } from './local-web.js?published-links'
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
 import { PAIR_ID, publicPairing } from './relay-pairing-store.js'
 import { MAX_WORKSPACE_EXPANSION_BYTES, publishWorkspaceExpansion } from './workspace-expansion.js'

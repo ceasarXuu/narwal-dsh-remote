@@ -22,6 +22,9 @@ const RESPONSE_HEADERS = new Set([
 const BASE64 = /^(?:[a-z\d+/]{4})*(?:[a-z\d+/]{2}==|[a-z\d+/]{3}=)?$/i
 const CONTROL = /[\u0000-\u001f\u007f]/u
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost)(?::(\d{1,5}))?(?=[/?#]|$)/i
+const SESSION_ID = /^[\w.:-]{1,512}$/
+const LINK_IN_TEXT = /(?:^|[\s([<"'`，。！？、；：])[*_]*(http:\/\/[^\s<>"'`，。！？、；：）】》〉」』〗]+)/gi
+const LINK_END = /[).,!?;\]}*_]+$/
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308])
 
 export const LOCAL_WEB_METHODS = new Set(['openLocalWeb', 'localWebRequest', 'localWebRead', 'localWebClose'])
@@ -31,11 +34,11 @@ function error(reason, message) {
 }
 
 function invalid() {
-	return error('invalid', '只支持已共享的本机 HTTP 服务和有效的网页请求。')
+	return error('invalid', '只支持本机 HTTP 服务和有效的网页请求。')
 }
 
 function notShared() {
-	return error('not-shared', '请在桌面 Narwal 设置中为这台设备共享该端口。')
+	return error('not-shared', '当前设备没有可用的本地网页预览。')
 }
 
 function unavailable() {
@@ -86,6 +89,37 @@ function safePath(path) {
 	return path
 }
 
+function containsServiceLink(text, target) {
+	if (typeof text !== 'string') return false
+	for (const [, href] of text.matchAll(LINK_IN_TEXT)) {
+		try {
+			const content = href.replace(LINK_END, '')
+			const link = parseService(content)
+			// Ignore delimiters surrounding the URL while preserving punctuation in the tapped path.
+			const ending = href.slice(content.length)
+			if (link.origin === target.origin && target.path.startsWith(link.path) &&
+				ending.startsWith(target.path.slice(link.path.length))) return true
+		} catch { /* Ignore links to anything other than a valid local service. */ }
+	}
+	return false
+}
+
+async function hasPublishedLink(bridge, sessionId, target, signal) {
+	if (typeof sessionId !== 'string' || !SESSION_ID.test(sessionId) || sessionId === '.' || sessionId === '..') return false
+	const query = bridge.ctx.get('sessionQuery')
+	if (typeof query?.observeSession !== 'function') throw unavailable()
+	const observation = await query.observeSession(sessionId, { signal, projectionMode: 'none' })
+	try {
+		return observation.events.some(({ type, data }) => {
+			const content = data?.message?.content
+			return type === 'assistant/message' && Array.isArray(content) &&
+				content.some(block => block?.type === 'text' && containsServiceLink(block.text, target))
+		})
+	} finally {
+		observation[Symbol.dispose]()
+	}
+}
+
 function grantStore(bridge) {
 	return bridge.localWeb ??= new Map()
 }
@@ -105,6 +139,8 @@ export function revokeLocalWeb(bridge, pairId) {
 }
 
 export function closeLocalWebDevice(bridge, device) {
+	device.localWebOpening?.abort()
+	delete device.localWebOpening
 	const grant = bridge.localWeb?.get(device.tokenId)
 	if (!grant) return
 	for (const record of grant.responses.values()) {
@@ -132,14 +168,20 @@ export function localWebStatus(bridge, pairId) {
 	return grant ? { port: grant.port, expiresAt: grant.expiresAt } : null
 }
 
-export function grantLocalWeb(bridge, pairId, port) {
+function sharePort(bridge, pairId, port, fromLink) {
 	if (!bridge.relayV2?.pairings.paired(pairId)) throw notShared()
 	parsePort(port)
 	ensureUserPort(bridge, port)
 	revokeLocalWeb(bridge, pairId)
 	const expiresAt = Date.now() + TTL_MS
 	const expiry = setTimeout(() => revokeLocalWeb(bridge, pairId), TTL_MS).unref()
-	grantStore(bridge).set(pairId, { port, expiresAt, expiry, responses: new Map() })
+	const grant = { port, expiresAt, expiry, fromLink, responses: new Map() }
+	grantStore(bridge).set(pairId, grant)
+	return grant
+}
+
+export function grantLocalWeb(bridge, pairId, port) {
+	const { expiresAt } = sharePort(bridge, pairId, port, false)
 	return { port, expiresAt }
 }
 
@@ -291,24 +333,41 @@ async function start(bridge, grant, device, args) {
 	}
 }
 
-export async function invokeLocalWeb(bridge, device, method, args) {
-	if (!device.active || !device.transport || !device.peer) throw unavailable()
-	const grant = currentGrant(bridge, device.tokenId)
-	if (method === 'openLocalWeb') {
-		const target = parseService(args.url)
-		ensureUserPort(bridge, target.port)
-		if (!grant || grant.port !== target.port) throw notShared()
+async function openLocalWeb(bridge, device, args, grant) {
+	const target = parseService(args.url)
+	ensureUserPort(bridge, target.port)
+	device.localWebOpening?.abort()
+	const opening = new AbortController()
+	device.localWebOpening = opening
+	try {
+		if (grant?.port !== target.port || grant.fromLink) {
+			const signal = AbortSignal.any([opening.signal, AbortSignal.timeout(8000)])
+			const published = await hasPublishedLink(bridge, args.sessionId, target, signal)
+			if (signal.aborted || device.disposed || !device.active) throw unavailable()
+			if (!published) throw error('link-required', '只能直接预览桌面会话提供的本地网页。')
+			grant = sharePort(bridge, device.tokenId, target.port, true)
+		}
 		for (const record of grant.responses.values()) finish(grant, record)
 		grant.origin = target.origin
 		grant.id = randomUUID()
 		return { id: grant.id, path: target.path }
+	} finally {
+		if (device.localWebOpening === opening) delete device.localWebOpening
 	}
+}
+
+export async function invokeLocalWeb(bridge, device, method, args) {
+	if (device.disposed || !device.active || !device.transport || !device.peer ||
+		!bridge.relayV2?.pairings.paired(device.tokenId)) throw unavailable()
+	const grant = currentGrant(bridge, device.tokenId)
+	if (method === 'openLocalWeb') return openLocalWeb(bridge, device, args, grant)
 	if (!grant || typeof args.id !== 'string' || grant.id !== args.id || !grant.origin) throw notShared()
 	ensureUserPort(bridge, grant.port)
 	try {
 		if (method === 'localWebRequest') return await start(bridge, grant, device, args)
 		if (method === 'localWebClose') {
-			closeLocalWebDevice(bridge, device)
+			if (grant.fromLink) revokeLocalWeb(bridge, device.tokenId)
+			else closeLocalWebDevice(bridge, device)
 			return { ok: true }
 		}
 		const record = grant.responses.get(args.responseId)

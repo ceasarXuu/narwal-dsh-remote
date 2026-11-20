@@ -20,12 +20,12 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
-import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?local-web'
-import { handleDeviceFrame } from './bridge-rpc.js?push'
+import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?published-links'
+import { handleDeviceFrame } from './bridge-rpc.js?session-transcript'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
-import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
-import { createMaidInstaller } from './maid-install.js?maid-companion'
-import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?task-actions'
+import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js?published-links'
+import { createMaidInstaller } from './maid-install.js?profile'
+import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?final-reply'
 import { createPushNotifications, listenForPushRequests } from './push-notifications.js?task-actions'
 import { loadRelayV2 } from './relay-v2.js?task-actions'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
@@ -354,7 +354,7 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, sessionTranscript: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
 				push: device.pushLocal === true,
 				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,

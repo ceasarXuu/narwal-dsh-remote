@@ -1,6 +1,6 @@
 {
   "name": "narwal-dsh-remote",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Narwal Server connects the iOS client to DeepSeek Harness over Wi-Fi or an end-to-end encrypted relay.",
   "type": "module",
   "license": "MIT",
@@ -35,8 +35,12 @@
     "@deepseek-ai/dsh-llm-deepseek-api-key": "*"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-llm-deepseek": { "optional": true },
-    "@deepseek-ai/dsh-llm-deepseek-api-key": { "optional": true }
+    "@deepseek-ai/dsh-llm-deepseek": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm-deepseek-api-key": {
+      "optional": true
+    }
   },
   "exports": {
     ".": "./index.js",
@@ -67,6 +71,7 @@
     "token-usage.js",
     "session-summaries.js",
     "session-control-filter.js",
+    "session-transcript.js",
     "workspace-expansion.js",
     "user-questions.js",
     "cordis.patch.yml",
@@ -109,6 +114,7 @@
       "token-usage.js",
       "session-summaries.js",
       "session-control-filter.js",
+      "session-transcript.js",
       "workspace-expansion.js",
       "user-questions.js",
       "vendor/toqr.mjs"

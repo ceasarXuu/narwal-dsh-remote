@@ -66,7 +66,11 @@ export function createMaidInstaller({ getManager, getConversation, directory, lo
 		if (typeof result?.sessionId !== 'string' || result.sessionId.length === 0 || result.sessionId.length > 200) {
 			throw new Error('Maid did not return a valid conversation')
 		}
-		return { kind: 'ready', sessionId: result.sessionId }
+		const profile = conversation.readProfile?.()
+		return {
+			kind: 'ready', sessionId: result.sessionId,
+			...(profile ? { profile: { name: profile.name, avatarVersion: profile.version } } : {}),
+		}
 	}
 
 	async function availability(refresh = false) {

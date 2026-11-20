@@ -31,7 +31,8 @@ export function notificationTitles(ctx, sessionId, liveSession) {
 }
 
 function assistantPreview(data) {
-	if (data.interrupted === true || !Array.isArray(data.message?.content)) return undefined
+	if (data.interrupted === true || !Array.isArray(data.message?.content)
+		|| data.message.content.some(part => part?.type === 'tool-call')) return undefined
 	let text = ''
 	for (const part of data.message.content) {
 		if (part?.type !== 'text' || typeof part.text !== 'string') continue

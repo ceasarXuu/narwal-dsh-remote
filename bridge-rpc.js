@@ -1,10 +1,11 @@
 import { readApiBalances } from './api-balances.js'
 import { invokeArtifactDownload } from './artifact-downloads.js'
 import { readGitHubProjects } from './github-projects.js'
-import { invokeLocalWeb, LOCAL_WEB_METHODS } from './local-web.js'
-import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js'
+import { invokeLocalWeb, LOCAL_WEB_METHODS } from './local-web.js?published-links'
+import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js?profile'
 import { readSessionSummaries } from './session-summaries.js'
 import { sessionControlFilter } from './session-control-filter.js'
+import { projectTranscriptPage, transcriptFollower, transcriptRequest } from './session-transcript.js'
 import { readWorkspaceExpansion } from './workspace-expansion.js'
 import { answerUserQuestion } from './user-questions.js?event-result-args'
 
@@ -160,7 +161,11 @@ export function handleDeviceFrame(bridge, device, text) {
 		return
 	}
 	let result
-	if (ns === 'narwal' && method === 'getTodayTokenUsage') {
+	const transcript = ns === 'session' && method === 'page' ? transcriptRequest(args, ['summary', 'process']) : undefined
+	if (transcript) {
+		result = bridge.deps.invoke({ namespace: ns, method, args: transcript.hostArgs, peer: device.peer })
+			.then(page => projectTranscriptPage(page, transcript.selection))
+	} else if (ns === 'narwal' && method === 'getTodayTokenUsage') {
 		result = bridge.todayTokenUsage.read(args)
 	} else if (ns === 'narwal' && method === 'answerUserQuestion') {
 		result = Promise.resolve().then(() => answerUserQuestion(device, args))
@@ -199,11 +204,13 @@ async function runStream(bridge, device, id, ns, method, args, revision) {
 	}
 	let handle = null
 	const { narwalFilter, ...hostArgs } = args
-	const filter = ns === 'session' && method === 'control' ? sessionControlFilter(narwalFilter) : undefined
+	const transcript = ns === 'session' && method === 'follow' ? transcriptRequest(args, ['summary', 'live']) : undefined
+	const filter = transcript ? transcriptFollower(transcript.selection)
+		: ns === 'session' && method === 'control' ? sessionControlFilter(narwalFilter) : undefined
 	try {
 		handle = ns === 'narwal' && method === 'userQuestionEvents'
 			? bridge.deps.openQuestionEvents(device)
-			: await bridge.deps.stream({ namespace: ns, method, args: filter ? hostArgs : args, peer: device.peer })
+			: await bridge.deps.stream({ namespace: ns, method, args: transcript ? transcript.hostArgs : filter ? hostArgs : args, peer: device.peer })
 	} catch (error) {
 		if (device.activityRevision !== revision) return
 		bridge.send(device, {
