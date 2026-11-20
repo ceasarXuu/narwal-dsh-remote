@@ -2,6 +2,7 @@ import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto
 import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { notificationTitles } from './notification-content.js?push'
+import { LIVE_ACTIVITY_METHODS, LiveActivities } from './live-activities.js'
 
 const hex = (value, size) => typeof value === 'string' && value.length === size && /^[a-f0-9]+$/.test(value)
 const digest = value => createHash('sha256').update(value).digest('hex')
@@ -43,7 +44,7 @@ function load(file) {
 }
 
 export class PushNotifications {
-	constructor({ url, clientUrl, admission, directory, pairings, devices, send, log }) {
+	constructor({ ctx, url, clientUrl, admission, directory, pairings, devices, send, log }) {
 		this.url = url
 		this.clientUrl = clientUrl
 		this.admission = admission
@@ -54,7 +55,27 @@ export class PushNotifications {
 		this.file = join(directory, 'push-v1.json')
 		Object.assign(this, load(this.file))
 		this.offers = new Map()
+		this.liveActivities = new LiveActivities(ctx, {
+			binding: id => this.bindings.get(id),
+			bindings: () => this.bindings,
+			set: (id, activity) => {
+				const record = this.bindings.get(id)
+				if (record && !record.revoked && record.activity !== activity) {
+					this.save(new Map(this.bindings).set(id, { ...record, activity }))
+				}
+			},
+			paired: id => Boolean(this.pairings().paired(id) && !this.bindings.get(id)?.revoked),
+			provision: id => this.enroll(id),
+			request: (id, path, method, role, data, signal) => {
+				const record = this.bindings.get(id)
+				if (!record || record.revoked) return 410
+				const keys = credentials(record)
+				return this.request(keys.binding, path, method, keys[role], data, signal)
+			},
+		})
 	}
+
+	close() { this.liveActivities.close() }
 
 	save(bindings = this.bindings, events = this.events) {
 		const tmp = this.file + '.' + randomBytes(8).toString('hex') + '.tmp'
@@ -74,9 +95,10 @@ export class PushNotifications {
 		return { pushLocal: true, pushTaskActions: taskActions === true, pushUntil: foreground ? Date.now() + 15_000 : 0 }
 	}
 
-	request(binding, suffix, method, token, data) {
+	request(binding, suffix, method, token, data, signal) {
+		const timeout = AbortSignal.timeout(5_000)
 		return fetch(this.url + '/v1/bindings/' + binding + suffix, {
-			method, redirect: 'error', signal: AbortSignal.timeout(5_000),
+			method, redirect: 'error', signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
 			headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
 			body: data === undefined ? undefined : JSON.stringify(data),
 		}).then(r => r.status)
@@ -98,8 +120,10 @@ export class PushNotifications {
 	}
 
 	handle(device, method, args) {
-		if (!device.pushLocal || !device.transport || !device.peer || !this.pairings().paired(device.tokenId)) return false
+		if (!device.transport || !device.peer || !this.pairings().paired(device.tokenId)) return false
 		const id = device.tokenId
+		if (LIVE_ACTIVITY_METHODS.has(method)) return this.liveActivities.handle(id, device.active === true, method, args)
+		if (!device.pushLocal) return false
 		if (method === 'pushEnroll') return this.enroll(id)
 		if (method === 'pushPresence') {
 			const record = this.bindings.get(id)
@@ -171,7 +195,8 @@ export class PushNotifications {
 	revoke(id) {
 		const record = this.bindings.get(id)
 		if (!record) return
-		this.save(new Map(this.bindings).set(id, { ...record, revoked: true }))
+		this.save(new Map(this.bindings).set(id, { ...record, revoked: true, activity: undefined }))
+		this.liveActivities.forget(id)
 	}
 
 	flushRevocations() {
@@ -220,6 +245,7 @@ export function listenForPushRequests(bridge, listen) {
 		}
 		return next()
 	}, options)
+	bridge.push.liveActivities?.install(listen)
 }
 
 function origin(value) {
@@ -239,6 +265,7 @@ export function createPushNotifications(bridge) {
 		const admission = readFileSync(file, 'utf8').trim()
 		if (!hex(admission, 64)) throw new Error('Invalid push admission key')
 		return new PushNotifications({
+			ctx: bridge.ctx,
 			url: origin(endpoint), clientUrl: origin(process.env.NARWAL_PUSH_CLIENT_URL ?? endpoint),
 			admission, directory: bridge.store.dir, log: bridge.log,
 			pairings: () => bridge.relayV2.pairings, devices: () => bridge.devices.values(),

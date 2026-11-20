@@ -21,12 +21,12 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?published-links'
-import { handleDeviceFrame } from './bridge-rpc.js?session-transcript'
+import { handleDeviceFrame } from './bridge-rpc.js?live-activity'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js?published-links'
 import { createMaidInstaller } from './maid-install.js?profile'
 import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?final-reply'
-import { createPushNotifications, listenForPushRequests } from './push-notifications.js?task-actions'
+import { createPushNotifications, listenForPushRequests } from './push-notifications.js?live-activity'
 import { loadRelayV2 } from './relay-v2.js?task-actions'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
@@ -202,6 +202,7 @@ class NarwalBridge {
 		this.stopping = true
 		closeAllLocalWeb(this)
 		this.watchPendingQuestions(false)
+		this.push?.close()
 		this.stopTask = new Promise((resolve) => {
 			if (!this.server) {
 				resolve()
@@ -356,13 +357,12 @@ class NarwalBridge {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, sessionTranscript: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
-				push: device.pushLocal === true,
+				push: device.pushLocal === true, liveActivity: Boolean(transport && this.push?.liveActivities?.enabled),
 				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,
 			},
 		})
 		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
-
 	teardown(device) {
 		closeLocalWebDevice(this, device)
 		for (const [id, task] of device.streams) this.disposeStream(device, id, task)

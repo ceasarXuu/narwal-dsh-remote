@@ -1,6 +1,6 @@
 {
   "name": "narwal-dsh-remote",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Narwal Server connects the iOS client to DeepSeek Harness over Wi-Fi or an end-to-end encrypted relay.",
   "type": "module",
   "license": "MIT",
@@ -66,6 +66,7 @@
     "maid-companion.js",
     "notification-content.js",
     "push-notifications.js",
+    "live-activities.js",
     "runtime-updates.js",
     "traffic-usage.js",
     "token-usage.js",
@@ -106,6 +107,7 @@
       "maid-companion.js",
       "notification-content.js",
       "push-notifications.js",
+      "live-activities.js",
       "token-store.js",
       "relay-v2.js",
       "relay-pairing-store.js",

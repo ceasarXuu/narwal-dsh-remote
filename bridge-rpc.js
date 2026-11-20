@@ -1,6 +1,7 @@
 import { readApiBalances } from './api-balances.js'
 import { invokeArtifactDownload } from './artifact-downloads.js'
 import { readGitHubProjects } from './github-projects.js'
+import { LIVE_ACTIVITY_METHODS } from './live-activities.js'
 import { invokeLocalWeb, LOCAL_WEB_METHODS } from './local-web.js?published-links'
 import { MAID_COMPANION_METHODS, invokeMaidCompanion } from './maid-companion.js?profile'
 import { readSessionSummaries } from './session-summaries.js'
@@ -51,7 +52,8 @@ export function handleDeviceFrame(bridge, device, text) {
 		bridge.setDeviceActive(device, id, args.active, args.lazyAvatar === true)
 		return
 	}
-	if (ns === 'narwal' && ['pushEnroll', 'pushPresence', 'pushClaim'].includes(method) && request?.stream !== true) {
+	if (ns === 'narwal' && (LIVE_ACTIVITY_METHODS.has(method) || ['pushEnroll', 'pushPresence', 'pushClaim'].includes(method))
+		&& request?.stream !== true) {
 		const reply = value => bridge.send(device, { id, ok: true, value }, { unary: true })
 		void Promise.resolve().then(() => bridge.push?.handle(device, method, args) ?? false)
 			.then(reply, () => reply(false))
@@ -204,13 +206,21 @@ async function runStream(bridge, device, id, ns, method, args, revision) {
 	}
 	let handle = null
 	const { narwalFilter, ...hostArgs } = args
-	const transcript = ns === 'session' && method === 'follow' ? transcriptRequest(args, ['summary', 'live']) : undefined
+	const follow = ns === 'session' && method === 'follow'
+	const transcript = follow ? transcriptRequest(args, ['summary', 'live']) : undefined
 	const filter = transcript ? transcriptFollower(transcript.selection)
 		: ns === 'session' && method === 'control' ? sessionControlFilter(narwalFilter) : undefined
+	let streamArgs = transcript?.hostArgs ?? (filter ? hostArgs : args)
+	if (follow && streamArgs.request?.assistantStream === false) {
+		// DSH accepts true or omission. Older Narwal clients send false to hide the stream.
+		const request = { ...streamArgs.request }
+		delete request.assistantStream
+		streamArgs = { ...streamArgs, request }
+	}
 	try {
 		handle = ns === 'narwal' && method === 'userQuestionEvents'
 			? bridge.deps.openQuestionEvents(device)
-			: await bridge.deps.stream({ namespace: ns, method, args: transcript ? transcript.hostArgs : filter ? hostArgs : args, peer: device.peer })
+			: await bridge.deps.stream({ namespace: ns, method, args: streamArgs, peer: device.peer })
 	} catch (error) {
 		if (device.activityRevision !== revision) return
 		bridge.send(device, {
