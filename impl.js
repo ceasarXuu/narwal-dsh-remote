@@ -26,9 +26,10 @@ import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { handlePanelRequest } from './bridge-panel.js?pairing-host-candidates'
-import { handleDeviceFrame } from './bridge-rpc.js'
+import { handlePanelRequest } from './bridge-panel.js?relay-v2'
+import { handleDeviceFrame } from './bridge-rpc.js?relay-v2'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
+import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
@@ -77,6 +78,7 @@ function readDesktopAccount() {
 class NarwalBridge {
 	constructor(ctx, config, deps) {
 		this.account = readDesktopAccount()
+		this.relayAccount = { ...this.account, avatar: null }
 		this.ctx = ctx
 		this.config = config
 		this.deps = deps
@@ -158,6 +160,10 @@ class NarwalBridge {
 		this.server.on('error', (err) => this.log.warn('bridge http error: %s', err?.message))
 
 		this.wss = new this.deps.WebSocketServer({ noServer: true })
+		if (this.relayV2) this.v2wss = new this.deps.WebSocketServer({
+			noServer: true, maxPayload: 65535, maxFragments: 8, maxBufferedChunks: 128,
+			maxPendingAutoPongs: 8, perMessageDeflate: false,
+		})
 		this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head))
 
 		const port = (this.config && Number(this.config.port)) || 48317
@@ -198,6 +204,7 @@ class NarwalBridge {
 			this.server.closeAllConnections()
 		})
 		try { this.relay?.dispose?.() } catch { /* nop */ }
+		this.relayV2?.stop()
 		for (const off of this.fanoutOffs) {
 			try { off?.() } catch { /* nop */ }
 		}
@@ -207,6 +214,7 @@ class NarwalBridge {
 		for (const device of [...this.devices.values()]) this.teardown(device)
 		this.devices.clear()
 		for (const socket of this.wss?.clients ?? []) socket.terminate()
+		this.v2wss?.close()
 		try { this.wss?.close() } catch { /* nop */ }
 		this.traffic.close()
 		this.log.info('bridge stopped; devices disposed')
@@ -264,6 +272,10 @@ class NarwalBridge {
 			socket.destroy()
 			return
 		}
+		if (url.pathname === '/v2/pair' || url.pathname === '/v2/ws') {
+			if (!this.relayV2) return this.rejectUpgrade(socket, 503, 'Encrypted pairing unavailable')
+			return this.relayV2.handleUpgrade(req, socket, head, url)
+		}
 		if (url.pathname !== '/ws') {
 			this.rejectUpgrade(socket, 404, 'unknown path')
 			return
@@ -320,14 +332,16 @@ class NarwalBridge {
 		try {
 			peer = this.deps.createPeer?.({ principal: { kind: 'owner' }, interactions: 'answer' }) ?? null
 		} catch { peer = null }
+		const { transport } = tokenRecord
+		if (transport && !peer) return ws.terminate()
 		const device = {
-			socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId,
+			socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId, transport,
 			active, activityRevision: 0, streams: new Map(), pendingUnsub: new Set(), connectedAt: Date.now(),
 		}
 		this.devices.set(sessionId, device)
 		this.refreshQuestionWatcher()
 
-		ws.on('message', (buf) => handleDeviceFrame(this, device, buf.toString('utf8')))
+		ws.on('message', (data) => handleDeviceFrame(this, device, transport ? data : data.toString('utf8')))
 		ws.on('close', () => {
 			if (this.devices.get(sessionId) === device) {
 				this.teardown(device)
@@ -339,10 +353,10 @@ class NarwalBridge {
 			event: 'hello',
 			payload: {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
-				account: active ? this.account : undefined, githubProjects: true, desktopId: this.store.getDesktopId(),
+				account: active ? this.account : undefined, githubProjects: transport !== 'relay', desktopId: this.store.getDesktopId(),
 			},
 		})
-		this.log.info('device %s (%s) connected', sessionId, device.label)
+		if (!transport) this.log.info('device %s (%s) connected', sessionId, device.label)
 	}
 
 	teardown(device) {
@@ -373,7 +387,10 @@ class NarwalBridge {
 			this.refreshQuestionWatcher()
 		}
 		this.send(device, { id, ok: true, value: { active } })
-		if (changed && active) this.send(device, { event: 'narwal/active', payload: { account: this.account } })
+		if (changed && active) {
+			const account = device.transport === 'relay' ? this.relayAccount : this.account
+			this.send(device, { event: 'narwal/active', payload: { account } })
+		}
 	}
 
 	disposeStream(device, id, task) {
@@ -386,10 +403,10 @@ class NarwalBridge {
 		if (device.disposed) return
 		try {
 			const payload = JSON.stringify(frame)
-			const transport = device.socket === this.relay?.socket ? 'relay' : 'wifi'
+			const transport = device.transport ?? (device.socket === this.relay?.socket ? 'relay' : 'wifi')
 			const bytes = meter ? Buffer.byteLength(payload) : 0
-			device.socket.send(payload, error => {
-				if (!error && bytes) this.traffic.record(transport, bytes)
+			device.socket.send(payload, (error, wireBytes) => {
+				if (!error && bytes) this.traffic.record(transport, wireBytes ?? bytes)
 			})
 		} catch { /* closing */ }
 	}
@@ -404,7 +421,7 @@ async function build(ctx, config, runtime) {
 		ctx.logger('narwal-server').warn('ws module unavailable; bridge disabled this session')
 		return null
 	}
-	const store = new TokenStore(process.env.DSH_HOME, config?.tokens)
+	const store = new TokenStore(process.env.NARWAL_PROFILE_HOME || process.env.DSH_HOME, config?.tokens)
 	try {
 		ctx.logger('narwal-server').info('token store: %s (%d tokens)', store.file, store.memory.length)
 	} catch { /* logger unavailable */ }
@@ -423,7 +440,11 @@ async function build(ctx, config, runtime) {
 	})
 	runtime?.registerStop?.(() => bridge.disposeAll())
 	try {
+		bridge.relayV2 = await loadRelayV2(bridge)
 		await bridge.start()
+		for (const record of bridge.relayV2?.pairings.list() ?? []) {
+			if (record.phoneKey) bridge.relayV2.startDialer(record)
+		}
 		if (config?.relay?.enabled && String(config.relay?.url || '').trim() && String(config.relay?.ticket || '').trim()) {
 			bridge.startRelayDialer(config.relay)
 		}

@@ -8,7 +8,7 @@ import { createRuntimeUpdates } from './runtime-updates.js'
 
 const IMPL = fileURLToPath(new URL('./impl.js', import.meta.url))
 const manifest = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'))
-const STATUS_DIR = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'narwal-server')
+const STATUS_DIR = join(process.env.NARWAL_PROFILE_HOME || process.env.DSH_HOME || join(homedir(), '.dsh'), 'narwal-server')
 const FIRST_CHECK_DELAY = 30_000
 const UPDATE_INTERVAL = 6 * 60 * 60_000
 

@@ -1,7 +1,7 @@
 {
   "name": "narwal-dsh-remote",
   "version": "0.6.0",
-  "description": "Narwal Server: local connection bridge (pairing tokens, QR, mDNS, Narwal Protocol v1 over WebSocket) that lets the Narwal iOS client drive this DSH instance.",
+  "description": "Narwal Server connects the iOS client to DeepSeek Harness over Wi-Fi or an end-to-end encrypted relay.",
   "type": "module",
   "license": "MIT",
   "author": "narwal",
@@ -49,6 +49,9 @@
     "bridge-panel.js",
     "bridge-rpc.js",
     "token-store.js",
+    "relay-v2.js",
+    "relay-pairing-store.js",
+    "relay-secure-socket.js",
     "api-balances.js",
     "github-projects.js",
     "github-projects-install.js",
@@ -82,6 +85,9 @@
       "github-projects.js",
       "github-projects-install.js",
       "token-store.js",
+      "relay-v2.js",
+      "relay-pairing-store.js",
+      "relay-secure-socket.js",
       "traffic-usage.js",
       "user-questions.js",
       "vendor/toqr.mjs"

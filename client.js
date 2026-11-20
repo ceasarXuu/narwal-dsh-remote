@@ -97,7 +97,9 @@ window.__ModuleLoader__.load({
 			const { token, port, t } = props
 			return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '8px 0 20px' } },
 				React.createElement('img', {
-					src: `http://${bridgeHost}:${port}/qr.svg?token=${encodeURIComponent(token.secret)}`,
+					src: token.protocol === 2
+						? `http://${bridgeHost}:${port}/v2/qr.svg?id=${encodeURIComponent(token.id)}`
+						: `http://${bridgeHost}:${port}/qr.svg?token=${encodeURIComponent(token.secret)}`,
 					alt: 'Narwal pairing QR', width: 176, height: 176,
 					style: { imageRendering: 'pixelated', background: '#fff', padding: 8, borderRadius: 10 }
 				}),
@@ -135,9 +137,9 @@ window.__ModuleLoader__.load({
 					React.createElement('div', { style: { flex: 1, minWidth: 0 } },
 						React.createElement(DeviceName, { token, t, onRename }),
 						React.createElement('div', { style: sub }, online ? t('online') : token.expiresAt ? t('waitingForScan') : t('offline'))),
-					React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')),
+					(token.protocol !== 2 || token.expiresAt) ? React.createElement('button', { style: btn, onClick: onToggle }, open ? t('hideQr') : t('showQr')) : null,
 					React.createElement('button', { style: btnDanger, onClick: onRemove }, t('remove'))),
-				open ? React.createElement(QrBlock, { token, port, t }) : null)
+				open && (token.protocol !== 2 || token.expiresAt) ? React.createElement(QrBlock, { token, port, t }) : null)
 		}
 
 		function TrafficSummary({ label, color, bytes }) {

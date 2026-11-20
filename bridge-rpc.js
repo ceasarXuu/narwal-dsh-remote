@@ -10,9 +10,10 @@ function streamLog(event, details) {
 }
 
 export function handleDeviceFrame(bridge, device, text) {
+	if (device.disposed) return
 	let request
 	try {
-		request = JSON.parse(text)
+		request = device.transport ? text : JSON.parse(text)
 	} catch {
 		bridge.send(device, { event: 'narwal/protocol', payload: 'frame is not JSON' })
 		return
@@ -20,7 +21,7 @@ export function handleDeviceFrame(bridge, device, text) {
 	const id = typeof request?.id === 'string' ? request.id : ''
 	if (request?.unsubscribe === true && id) {
 		if (!device.active) return
-		streamLog('unsub', { sessionId: device.sessionId, id })
+		if (!device.transport) streamLog('unsub', { sessionId: device.sessionId, id })
 		const task = device.streams.get(id)
 		if (task) {
 			device.streams.delete(id)
@@ -60,8 +61,8 @@ export function handleDeviceFrame(bridge, device, text) {
 		return
 	}
 	if (ns === 'narwal' && method === 'getApiBalances') {
-		// Relay tickets do not establish the phone's paired identity on the desktop.
-		if (!device.peer || device.socket === bridge.relay?.socket) {
+		// Local provider account metadata is available only on the direct connection.
+		if (!device.peer || device.transport === 'relay' || device.socket === bridge.relay?.socket) {
 			bridge.send(device, { id, ok: true, value: { status: 'unsupported' } })
 			return
 		}
@@ -70,7 +71,7 @@ export function handleDeviceFrame(bridge, device, text) {
 	}
 	if (ns === 'narwal' && ['getGitHubProjects', 'installGitHubProjects', 'enableGitHubProjects'].includes(method)) {
 		const reply = (value) => sendResult({ id, ok: true, value })
-		if (!device.peer || device.tokenId === 'relay') {
+		if (!device.peer || device.transport === 'relay' || device.tokenId === 'relay') {
 			reply({ kind: 'unavailable' })
 			return
 		}
@@ -139,7 +140,7 @@ async function runStream(bridge, device, id, ns, method, args, revision) {
 		try { handle?.dispose?.() } catch { }
 		return
 	}
-	streamLog('runStream', { sessionId: device.sessionId, id, ns, method })
+	if (!device.transport) streamLog('runStream', { sessionId: device.sessionId, id, ns, method })
 	const task = { iterator, handle }
 	device.streams.set(id, task)
 	if (device.pendingUnsub.has(id)) {

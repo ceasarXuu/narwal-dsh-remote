@@ -2,6 +2,7 @@ import { createRequire } from 'node:module'
 import { networkInterfaces } from 'node:os'
 
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
+import { PAIR_ID, publicPairing } from './relay-pairing-store.js'
 
 const MAX_PAIRING_HOSTS = 3
 const requirePkg = createRequire(import.meta.url)
@@ -122,6 +123,28 @@ function pairHosts(bridge) {
 	return [...new Set(addresses)].slice(0, MAX_PAIRING_HOSTS)
 }
 
+async function v2PairingRequest(bridge, req, res, url, corsHeaders, local) {
+	if (!local) return res.writeHead(403).end()
+	const id = url.searchParams.get('id')
+	const pairing = PAIR_ID.test(id) && bridge.relayV2?.pairings.pending(id)
+	if (!pairing) return res.writeHead(404).end()
+	const [host, ...alternateHosts] = pairHosts(bridge)
+	const params = new URLSearchParams({
+		v: '2', host, port: String(Number(bridge.config?.port) || 48317), id,
+		key: bridge.relayV2.pairings.identity.publicKey, secret: pairing.secret, name: bridge.hostLabel(),
+	})
+	for (const alternate of alternateHosts) params.append('hostAlt', alternate)
+	const uri = `narwal://pair?${params}`
+	if (url.pathname === '/v2/pairing-uri') return replyJson(res, corsHeaders, { uri })
+	const { toQR } = await loadToqr(bridge)
+	if (bridge.stopping || res.destroyed) return
+	const data = toQR(uri, 1)
+	res.writeHead(200, {
+		'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff',
+	})
+	res.end(renderQrSvg(data, Math.round(Math.sqrt(data.length)) || 0))
+}
+
 export async function handlePanelRequest(bridge, req, res) {
 	if (bridge.stopping) {
 		res.writeHead(503).end()
@@ -152,6 +175,12 @@ export async function handlePanelRequest(bridge, req, res) {
 		res.writeHead(400).end()
 		return
 	}
+	const localPanel = isTrustedLocal(req) && /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(req.headers?.host ?? '')
+	if (req.method === 'GET' && ['/v2/qr.svg', '/v2/pairing-uri'].includes(url.pathname)) {
+		try { await v2PairingRequest(bridge, req, res, url, corsHeaders, localPanel) }
+		catch { if (!res.headersSent) res.writeHead(500).end() }
+		return
+	}
 	const allowed = req.method === 'GET' ? ['/qr.svg', '/stats', '/tokens', '/relay-status'] : req.method === 'POST' ? ['/tokens', '/devices', '/reload'] : []
 	if (!allowed.includes(url.pathname)) {
 		res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -176,6 +205,7 @@ export async function handlePanelRequest(bridge, req, res) {
 		else replyJson(res, corsHeaders, { ok: true })
 		return
 	}
+	const v2 = localPanel ? bridge.relayV2 : null
 	try {
 		if (url.pathname === '/relay-status') {
 			const relay = bridge.relay
@@ -200,9 +230,10 @@ export async function handlePanelRequest(bridge, req, res) {
 				pairHost: pairHosts(bridge)[0],
 				port: Number(bridge.config?.port) || 48317,
 				advertiseName: bridge.hostLabel(),
-				tokens: bridge.store.list().length,
+				tokens: bridge.store.list().length + (v2?.pairings.list().length ?? 0),
+				...(localPanel ? { encryptedPairing: Boolean(v2) } : {}),
 				traffic: bridge.traffic.snapshot(),
-				devices: [...bridge.devices.values()].map((d) => ({
+				devices: [...bridge.devices.values()].filter(d => !d.transport || localPanel).map((d) => ({
 					sessionId: d.sessionId,
 					tokenId: d.tokenId ?? null,
 					label: d.label,
@@ -236,10 +267,11 @@ export async function handlePanelRequest(bridge, req, res) {
 					replyJson(res, corsHeaders, { ok: false, error: 'no such device' })
 					return
 				}
-				auditLine(bridge.ctx, 'device/kick', { sessionId: device.sessionId, label: device.label, byToken: matched.id, at: Date.now() })
+				if (device.transport && !localPanel) return replyJson(res, corsHeaders, { ok: false, error: 'local-panel-required' }, 403)
+				if (!device.transport) auditLine(bridge.ctx, 'device/kick', { sessionId: device.sessionId, label: device.label, byToken: matched.id, at: Date.now() })
 				bridge.teardown(device)
 				bridge.devices.delete(device.sessionId)
-				bridge.log.info('device %s (%s) kicked by panel', device.sessionId, device.label)
+				if (!device.transport) bridge.log.info('device %s (%s) kicked by panel', device.sessionId, device.label)
 				replyJson(res, corsHeaders, { ok: true })
 				return
 			}
@@ -251,7 +283,7 @@ export async function handlePanelRequest(bridge, req, res) {
 			if (req.method === 'GET') {
 				replyJson(res, corsHeaders, {
 					pairHost: pairHosts(bridge)[0],
-					tokens: bridge.store.list().map(panelToken),
+					tokens: [...bridge.store.list().map(panelToken), ...(v2?.pairings.list().map(publicPairing) ?? [])],
 					maxPairings: MAX_PAIRINGS,
 				})
 				return
@@ -264,6 +296,14 @@ export async function handlePanelRequest(bridge, req, res) {
 			}
 			if (bridge.stopping || res.destroyed) return
 			if (body?.action === 'create') {
+				if (!v2 && body.relay !== undefined) return replyJson(res, corsHeaders, { ok: false, error: 'encrypted-pairing-unavailable' }, 503)
+				if (v2) {
+					let created
+					try { created = await v2.create(body.label, body.relay) }
+					catch { return replyJson(res, corsHeaders, { ok: false, error: 'relay-invite-unavailable' }, 422) }
+					if (!created) return replyJson(res, corsHeaders, { ok: false, error: 'pairing-limit' }, 409)
+					return replyJson(res, corsHeaders, publicPairing(created))
+				}
 				const token = bridge.store.create(body?.label)
 				if (!token) {
 					replyJson(res, corsHeaders, { ok: false, error: 'pairing-limit' }, 409)
@@ -274,12 +314,19 @@ export async function handlePanelRequest(bridge, req, res) {
 				return
 			}
 			if (body?.action === 'relabel' && typeof body?.id === 'string') {
+				if (v2?.pairings.list().some(record => record.id === body.id)) {
+					return replyJson(res, corsHeaders, { ok: true, token: publicPairing(v2.pairings.relabel(body.id, body.label)) })
+				}
 				auditLine(bridge.ctx, 'token/relabel', { id: body.id, next: String(body?.label ?? '').slice(0, 24), byToken: matched.id, at: Date.now() })
 				const updated = bridge.store.relabel?.(body.id, body?.label) ?? null
 				replyJson(res, corsHeaders, { ok: true, token: panelToken(updated) })
 				return
 			}
 			if (body?.action === 'revoke' && typeof body?.id === 'string') {
+				if (v2?.pairings.list().some(record => record.id === body.id)) {
+					v2.revoke(body.id)
+					return replyJson(res, corsHeaders, { ok: true })
+				}
 				auditLine(bridge.ctx, 'token/revoke', { id: body.id, byToken: matched.id, at: Date.now() })
 				bridge.store.revoke?.(body.id)
 				bridge.killDevicesByTokenId(body.id, 'token revoked')
