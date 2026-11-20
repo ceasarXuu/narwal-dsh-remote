@@ -65,3 +65,11 @@ export function taskCompletionNotices(ctx, emit) {
 		})
 	}
 }
+
+export function sendLegacyNotice(bridge, payload) {
+	for (const device of bridge.devices.values()) {
+		if (!device.active && device.peer && device.socket !== bridge.relay?.socket && !device.pushLocal) {
+			bridge.send(device, { event: 'narwal/notification', payload })
+		}
+	}
+}

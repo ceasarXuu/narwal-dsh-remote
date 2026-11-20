@@ -136,7 +136,8 @@ class RelayV2 {
 				clearTimeout(timer)
 				sendControl(noise, session, socket, { type: 'activated', ...(compactReplies ? { compactReplies: true } : {}) })
 				onReady?.()
-				void this.bridge.attach(adapter, { id, label: current.label, transport }, false).catch(() => adapter.terminate())
+				void this.bridge.attach(adapter, { id, label: current.label, transport, pushForeground: activation.pushForeground }, false)
+					.catch(() => adapter.terminate())
 			} catch {
 				socket.terminate()
 			}
@@ -212,7 +213,9 @@ class RelayV2 {
 	}
 
 	revoke(id) {
+		this.bridge.push?.revoke(id)
 		this.pairings.revoke(id)
+		this.bridge.push?.flushRevocations()
 		this.stopDialer(id)
 		this.active.get(id)?.terminate()
 		this.highest.delete(id)

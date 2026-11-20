@@ -21,11 +21,12 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?local-web'
-import { handleDeviceFrame } from './bridge-rpc.js?today-token-usage'
+import { handleDeviceFrame } from './bridge-rpc.js?push'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
-import { notificationTitles, taskCompletionNotices } from './notification-content.js'
+import { notificationTitles, sendLegacyNotice, taskCompletionNotices } from './notification-content.js?push'
+import { createPushNotifications, observePushQuestions } from './push-notifications.js'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
@@ -92,7 +93,7 @@ class NarwalBridge {
 		this.stopping = false
 		this.fanoutOffs = []
 		this.watchPendingQuestions = watchPendingQuestions(ctx.typertGateway, sessionId => {
-			this.notice({ kind: 'agent-question', sessionId, ...notificationTitles(ctx, sessionId) })
+			sendLegacyNotice(this, { kind: 'agent-question', sessionId, ...notificationTitles(ctx, sessionId) })
 		})
 	}
 
@@ -172,11 +173,13 @@ class NarwalBridge {
 		const port = (this.config && Number(this.config.port)) || 48317
 		await once(this.server.listen(port, '0.0.0.0'), 'listening')
 		this.log.info('narwal bridge listening on %d (ws /ws?token=...)', port)
+		this.push = createPushNotifications(this)
 		this.listenForHostEvents()
 
 		/* heartbeat: 保活 NAT/WiFi 链路,杀掉死 socket */
 		this.aliveFails = new Map()
 		this.heartbeat = setInterval(() => {
+			this.push?.flushRevocations()
 			for (const device of [...this.devices.values()]) {
 				const fails = (this.aliveFails.get(device.sessionId) ?? 0) + 1
 				this.aliveFails.set(device.sessionId, fails)
@@ -240,15 +243,11 @@ class NarwalBridge {
 				}
 			})
 		}
-		listen('session/event', taskCompletionNotices(this.ctx, payload => this.notice(payload)), { global: true })
-	}
-
-	notice(payload) {
-		for (const device of this.devices.values()) {
-			if (!device.active && device.peer && device.socket !== this.relay?.socket) {
-				this.send(device, { event: 'narwal/notification', payload })
-			}
-		}
+		listen('session/event', taskCompletionNotices(this.ctx, payload => {
+			this.push?.publish(payload)
+			sendLegacyNotice(this, payload)
+		}), { global: true })
+		if (this.push) listen('user-questions/request', observePushQuestions(this), { global: true, prepend: true })
 	}
 
 	refreshQuestionWatcher() {
@@ -338,6 +337,7 @@ class NarwalBridge {
 		const device = {
 			socket: ws, peer, label: tokenRecord.label ?? tokenRecord.id, tokenId: tokenRecord.id, sessionId, transport,
 			active, activityRevision: 0, streams: new Map(), pendingUnsub: new Set(), connectedAt: Date.now(),
+			...this.push?.localDevice(tokenRecord.pushForeground),
 		}
 		this.devices.set(sessionId, device)
 		this.refreshQuestionWatcher()
@@ -356,6 +356,7 @@ class NarwalBridge {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
+				push: device.pushLocal === true,
 				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,
 			},
 		})

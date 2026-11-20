@@ -1,0 +1,230 @@
+import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
+import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { notificationTitles } from './notification-content.js?push'
+
+const hex = (value, size) => typeof value === 'string' && value.length === size && /^[a-f0-9]+$/.test(value)
+const digest = value => createHash('sha256').update(value).digest('hex')
+const derive = (seed, purpose) => createHmac('sha256', Buffer.from(seed, 'hex')).update(purpose).digest('hex')
+const expiry = 120
+
+function credentials(record) {
+	const { seed } = record
+	return {
+		binding: derive(seed, 'narwal/push/binding').slice(0, 32),
+		phone: derive(seed, 'narwal/push/phone'),
+		desktop: derive(seed, 'narwal/push/desktop'),
+		seal: derive(seed, 'narwal/push/seal'),
+	}
+}
+
+function sealLink(key, payload) {
+	const iv = randomBytes(12)
+	const cipher = createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv)
+	const plaintext = JSON.stringify({
+		kind: payload.kind, sessionId: payload.sessionId, eventId: payload.eventId,
+		...(payload.callId ? { callId: payload.callId } : {}),
+	})
+	return Buffer.concat([iv, cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]).toString('base64')
+}
+
+function load(file) {
+	try {
+		const stat = lstatSync(file)
+		if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('Unsafe push state permissions')
+		const data = JSON.parse(readFileSync(file, 'utf8'))
+		if (data?.format !== 1 || !Array.isArray(data.bindings) || !Array.isArray(data.events)) throw new Error('Invalid push state')
+		return { bindings: new Map(data.bindings), events: new Map(data.events) }
+	} catch (error) {
+		if (error?.code !== 'ENOENT') throw error
+		return { bindings: new Map(), events: new Map() }
+	}
+}
+
+export class PushNotifications {
+	constructor({ url, clientUrl, admission, directory, pairings, devices, send, log }) {
+		this.url = url
+		this.clientUrl = clientUrl
+		this.admission = admission
+		this.pairings = pairings
+		this.devices = devices
+		this.send = send
+		this.log = log
+		this.file = join(directory, 'push-v1.json')
+		Object.assign(this, load(this.file))
+		this.offers = new Map()
+	}
+
+	save(bindings = this.bindings, events = this.events) {
+		const tmp = this.file + '.' + randomBytes(8).toString('hex') + '.tmp'
+		try {
+			writeFileSync(tmp, JSON.stringify({ format: 1, bindings: [...bindings], events: [...events] }),
+				{ mode: 0o600, flag: 'wx', flush: true })
+			renameSync(tmp, this.file)
+		} finally {
+			rmSync(tmp, { force: true })
+		}
+		this.bindings = bindings
+		this.events = events
+	}
+
+	localDevice(foreground) {
+		return typeof foreground === 'boolean' ? { pushLocal: true, pushUntil: foreground ? Date.now() + 15_000 : 0 } : undefined
+	}
+
+	request(binding, suffix, method, token, data) {
+		return fetch(this.url + '/v1/bindings/' + binding + suffix, {
+			method, redirect: 'error', signal: AbortSignal.timeout(5_000),
+			headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+			body: data === undefined ? undefined : JSON.stringify(data),
+		}).then(r => r.status)
+	}
+
+	async enroll(id) {
+		if (!this.pairings().paired(id)) return null
+		let record = this.bindings.get(id)
+		if (!record) {
+			record = { seed: randomBytes(32).toString('hex'), enabled: false }
+			this.save(new Map(this.bindings).set(id, record))
+		}
+		const keys = credentials(record)
+		const status = await this.request(keys.binding, '', 'PUT', this.admission, {
+			phoneHash: digest(keys.phone), desktopHash: digest(keys.desktop),
+		})
+		if (status !== 204 || !this.pairings().paired(id)) return null
+		return { binding: keys.binding, registration: keys.phone, seal: keys.seal, url: this.clientUrl }
+	}
+
+	handle(device, method, args) {
+		if (!device.pushLocal || !device.transport || !device.peer || !this.pairings().paired(device.tokenId)) return false
+		const id = device.tokenId
+		if (method === 'pushEnroll') return this.enroll(id)
+		if (method === 'pushPresence') {
+			const record = this.bindings.get(id)
+			if (typeof args.foreground !== 'boolean') return false
+			if (record && !record.enabled && args.registered === true) this.save(new Map(this.bindings).set(id, { ...record, enabled: true }))
+			device.pushUntil = args.foreground ? Date.now() + 15_000 : 0
+			return true
+		}
+		const offer = this.offers.get(args.eventKey)
+		if (!offer || offer.device !== device || !(device.pushUntil > Date.now())) return false
+		offer.finish(true)
+		return true
+	}
+
+	publish(payload) {
+		if (!payload.eventId || typeof payload.sessionId !== 'string' || payload.sessionId.length > 512
+			|| !['task-complete', 'agent-question'].includes(payload.kind)) return
+		for (const pair of this.pairings().list()) {
+			if (pair.phoneKey) void this.deliver(pair.id, payload).catch(() => this.log.warn('Push delivery could not be submitted'))
+		}
+	}
+
+	async deliver(id, payload) {
+		const time = Date.now()
+		const device = [...this.devices()].find(value => value.pushLocal && !value.disposed
+			&& value.tokenId === id && value.pushUntil > time)
+		let record = this.bindings.get(id)
+		if (!record?.enabled && !device) return
+		if (!record) {
+			record = { seed: randomBytes(32).toString('hex'), enabled: false }
+			this.save(new Map(this.bindings).set(id, record))
+		}
+		const keys = credentials(record)
+		const identity = JSON.stringify([payload.kind, payload.sessionId, payload.eventId])
+		const eventKey = derive(keys.seal, identity)
+		if (this.events.has(eventKey)) return
+		const events = new Map([...this.events].filter(([, recorded]) => time - recorded < 86_400_000))
+		if (events.size >= 16_384) return
+		// The journal is written before either side can produce a visible notification.
+		this.save(this.bindings, events.set(eventKey, time))
+		if (device && await this.offer(device, eventKey, payload)) return
+		if (!record.enabled || !this.pairings().paired(id) || Date.now() >= time + expiry * 1_000) return
+		const data = { eventKey, envelope: sealLink(keys.seal, payload), expiresAt: Math.floor(time / 1_000) + expiry }
+		const status = await this.request(keys.binding, '/deliveries', 'POST', keys.desktop, data)
+		if (status !== 202 && status !== 409 && status !== 410) this.log.warn('Push service did not accept a delivery (%d)', status)
+	}
+
+	offer(device, eventKey, notification) {
+		return new Promise(resolve => {
+			const finish = accepted => {
+				clearTimeout(timer)
+				this.offers.delete(eventKey)
+				resolve(accepted)
+			}
+			const timer = setTimeout(() => finish(false), 500)
+			this.offers.set(eventKey, { device, finish })
+			this.send(device, { event: 'narwal/pushOffer', payload: { eventKey, notification } })
+		})
+	}
+
+	revoke(id) {
+		const record = this.bindings.get(id)
+		if (!record) return
+		this.save(new Map(this.bindings).set(id, { ...record, revoked: true }))
+	}
+
+	flushRevocations() {
+		if (this.revoking) return
+		this.revoking = true
+		void (async () => {
+			for (const [id, record] of this.bindings) {
+				if (!record.revoked || this.pairings().paired(id)) continue
+				try {
+					const keys = credentials(record)
+					const status = await this.request(keys.binding, '', 'DELETE', keys.desktop)
+					if (status === 204 || status === 404) {
+						const remaining = new Map(this.bindings)
+						remaining.delete(id)
+						this.save(remaining)
+					}
+				} catch { /* Retry on the next heartbeat. */ }
+			}
+		})().finally(() => { this.revoking = false })
+	}
+}
+
+export function observePushQuestions(bridge) {
+	const transient = new WeakMap()
+	return (request, next) => {
+		const session = request.agent?.session
+		const callId = typeof request.wait?.callId === 'string' && request.wait.callId.length <= 512 ? request.wait.callId : undefined
+		if (bridge.push && typeof session?.id === 'string'
+			&& session.header?.origin !== 'subagent' && !request.signal?.aborted
+			&& Array.isArray(request.questions) && request.questions.length
+			&& !request.questions.some(question => question?.intent?.kind === 'approval')) {
+			const eventId = callId || transient.get(request) || randomBytes(16).toString('hex')
+			if (!callId) transient.set(request, eventId)
+			if (!bridge.stopping) bridge.push.publish({
+				kind: 'agent-question', sessionId: session.id, callId, eventId,
+				...notificationTitles(bridge.ctx, session.id, session),
+			})
+		}
+		return next()
+	}
+}
+
+function origin(value) {
+	const url = new URL(value)
+	const loopback = url.hostname === '127.0.0.1' && url.protocol === 'http:'
+	if ((!loopback && url.protocol !== 'https:') || url.href !== url.origin + '/') throw new Error('Invalid push URL')
+	return url.origin
+}
+
+export function createPushNotifications(bridge) {
+	const file = process.env.NARWAL_PUSH_ADMISSION_FILE
+	const endpoint = process.env.NARWAL_PUSH_URL
+	if (!file || !endpoint || !bridge.relayV2) return
+	try {
+		const stat = lstatSync(file)
+		if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('Unsafe push admission file')
+		const admission = readFileSync(file, 'utf8').trim()
+		if (!hex(admission, 64)) throw new Error('Invalid push admission key')
+		return new PushNotifications({
+			url: origin(endpoint), clientUrl: origin(process.env.NARWAL_PUSH_CLIENT_URL ?? endpoint),
+			admission, directory: bridge.store.dir, log: bridge.log,
+			pairings: () => bridge.relayV2.pairings, devices: () => bridge.devices.values(),
+			send: (device, frame) => bridge.send(device, frame),
+		})
+	} catch { bridge.log.warn('Unable to initialize Narwal Push') }
+}

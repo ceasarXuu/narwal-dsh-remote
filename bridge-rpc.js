@@ -50,6 +50,12 @@ export function handleDeviceFrame(bridge, device, text) {
 		bridge.setDeviceActive(device, id, args.active, args.lazyAvatar === true)
 		return
 	}
+	if (ns === 'narwal' && ['pushEnroll', 'pushPresence', 'pushClaim'].includes(method) && request?.stream !== true) {
+		const reply = value => bridge.send(device, { id, ok: true, value }, { unary: true })
+		void Promise.resolve().then(() => bridge.push?.handle(device, method, args) ?? false)
+			.then(reply, () => reply(false))
+		return
+	}
 	if (!device.active) {
 		bridge.send(device, { id, ok: false, error: { code: 'narwal/device-inactive', message: 'Desktop is not selected' } }, { unary: request?.stream !== true })
 		return
