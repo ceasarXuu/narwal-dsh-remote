@@ -25,6 +25,7 @@ import { handleDeviceFrame } from './bridge-rpc.js?today-token-usage'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js'
 import { createMaidInstaller } from './maid-install.js?maid-companion'
+import { notificationTitles, taskCompletionNotices } from './notification-content.js'
 import { loadRelayV2 } from './relay-v2.js'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
@@ -91,7 +92,7 @@ class NarwalBridge {
 		this.stopping = false
 		this.fanoutOffs = []
 		this.watchPendingQuestions = watchPendingQuestions(ctx.typertGateway, sessionId => {
-			this.notice({ kind: 'agent-question', sessionId })
+			this.notice({ kind: 'agent-question', sessionId, ...notificationTitles(ctx, sessionId) })
 		})
 	}
 
@@ -239,18 +240,14 @@ class NarwalBridge {
 				}
 			})
 		}
-		listen('session/event', (session, event) => {
-			if (event?.type !== 'turn/end' || event.data.reason?.kind !== 'completed') return
-			if (typeof session?.id !== 'string' || session.header?.origin === 'subagent') return
-			const sequence = event.seq ?? event.data.turn
-			if (!Number.isSafeInteger(sequence)) return
-			this.notice({ kind: 'task-complete', sessionId: session.id, eventId: String(sequence) })
-		}, { global: true })
+		listen('session/event', taskCompletionNotices(this.ctx, payload => this.notice(payload)), { global: true })
 	}
 
 	notice(payload) {
 		for (const device of this.devices.values()) {
-			if (!device.active && device.peer) this.send(device, { event: 'narwal/notification', payload })
+			if (!device.active && device.peer && device.socket !== this.relay?.socket) {
+				this.send(device, { event: 'narwal/notification', payload })
+			}
 		}
 	}
 
