@@ -36,4 +36,17 @@ npm run pack -- /tmp
 
 Install the resulting `narwal-dsh-remote-<version>.tgz` in your DSH profile to test a local build. See [publishing](https://github.com/ceasarXuu/narwal-dsh-remote/blob/main/CONTRIBUTING.md#publish-to-npm) for the release workflow.
 
+### Private Relay build
+
+On a machine with the same operating system and CPU architecture as the target DSH host, install Rust and build the Noise addon from a Narwal checkout. Pack the plugin into a separate directory for private builds.
+
+```sh
+cd /path/to/Narwal
+bash packages/relay-crypto/scripts/build-node.sh
+cd /path/to/narwal-dsh-remote
+NARWAL_NOISE_DIR=/path/to/Narwal/packages/relay-crypto/dist/node npm run pack -- /tmp/narwal-relay-private
+```
+
+Install the archive in your DSH profile. The private archive bundles the native addon and bridge runtime for local distribution. The destination can load the addon directly from the installed package without setting `NARWAL_NOISE_DIR` or checking out Narwal.
+
 [Privacy policy draft](https://ceasarxuu.github.io/narwal-dsh-remote/privacy.html) · [Service statement draft](https://ceasarxuu.github.io/narwal-dsh-remote/service.html) · [MIT license](https://github.com/ceasarXuu/narwal-dsh-remote/blob/main/LICENSE)

@@ -36,4 +36,17 @@ npm run pack -- /tmp
 
 将生成的 `narwal-dsh-remote-<version>.tgz` 装入 DSH profile 即可试用本地构建。发布流程见 [npm 发布说明](CONTRIBUTING.md#publish-to-npm)。
 
+### Relay 私有构建
+
+在与目标 DSH 主机操作系统和 CPU 架构一致的机器上安装 Rust，从 Narwal 源码构建 Noise 原生扩展。然后回到本仓库，把私有包输出到单独目录。
+
+```sh
+cd /path/to/Narwal
+bash packages/relay-crypto/scripts/build-node.sh
+cd /path/to/narwal-dsh-remote
+NARWAL_NOISE_DIR=/path/to/Narwal/packages/relay-crypto/dist/node npm run pack -- /tmp/narwal-relay-private
+```
+
+将生成的压缩包装入 DSH profile。私有包自带原生扩展和桥接运行时，通过本地压缩包分发。目标主机可以直接加载包内扩展，无需设置 `NARWAL_NOISE_DIR` 或检出 Narwal 源码。
+
 [隐私政策草稿](https://ceasarxuu.github.io/narwal-dsh-remote/zh/privacy.html) · [服务声明草稿](https://ceasarxuu.github.io/narwal-dsh-remote/zh/service.html) · [MIT 许可](LICENSE)
