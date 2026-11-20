@@ -20,5 +20,6 @@
           url: ''
           ticket: ''
         lanHost: ''
+        tailnetHost: ''
         tokens: []
         devices: []

@@ -26,7 +26,7 @@ import { createServer, STATUS_CODES } from 'node:http'
 import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { handlePanelRequest } from './bridge-panel.js?relay-v2'
+import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?tailnet-pairing'
 import { handleDeviceFrame } from './bridge-rpc.js?relay-v2'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { loadRelayV2 } from './relay-v2.js'
@@ -84,6 +84,7 @@ class NarwalBridge {
 		this.deps = deps
 		this.store = deps.store
 		this.log = ctx.logger('narwal-server')
+		this.tailnetHost = configuredTailnetHost(config?.tailnetHost, this.log)
 		this.traffic = new TrafficUsage(this.store.dir, this.log)
 		this.devices = new Map()
 		this.stopping = false

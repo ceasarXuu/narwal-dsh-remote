@@ -1,10 +1,13 @@
 import { createRequire } from 'node:module'
+import { isIPv4 } from 'node:net'
 import { networkInterfaces } from 'node:os'
 
 import { MAX_PAIRINGS } from './token-store.js?device-pairing'
 import { PAIR_ID, publicPairing } from './relay-pairing-store.js'
 
 const MAX_PAIRING_HOSTS = 3
+const DNS_LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+const TAILNET_DNS = new RegExp(`^${DNS_LABEL}\\.${DNS_LABEL}\\.ts\\.net$`)
 const requirePkg = createRequire(import.meta.url)
 const VERSION = (() => {
 	try {
@@ -115,9 +118,29 @@ function loadToqr(bridge) {
 	return bridge.toqrp
 }
 
-function pairHosts(bridge) {
+function isTailnetIp(host) {
+	if (!isIPv4(host)) return false
+	const [first, second] = host.split('.').map(Number)
+	return first === 100 && second >= 64 && second <= 127
+}
+
+export function configuredTailnetHost(value, log) {
+	if (value == null) return undefined
+	if (typeof value === 'string') {
+		const host = value.trim().toLowerCase()
+		if (!host) return undefined
+		if (isTailnetIp(host)) return host
+		const name = host.replace(/\.$/, '')
+		if (TAILNET_DNS.test(name)) return name
+	}
+	log.warn('Ignoring invalid tailnetHost. Use a Tailscale IPv4 address or full MagicDNS name.')
+	return undefined
+}
+
+function pairHosts(bridge, tailnetHost) {
 	const lan = String(bridge.config?.lanHost ?? '').trim()
-	const addresses = autoLanIps()
+	const detected = autoLanIps()
+	const addresses = tailnetHost ? detected.filter(address => !isTailnetIp(address)) : detected
 	if (lan) addresses.unshift(lan)
 	if (!addresses.length) addresses.push(bridge.hostLabel())
 	return [...new Set(addresses)].slice(0, MAX_PAIRING_HOSTS)
@@ -128,12 +151,13 @@ async function v2PairingRequest(bridge, req, res, url, corsHeaders, local) {
 	const id = url.searchParams.get('id')
 	const pairing = PAIR_ID.test(id) && bridge.relayV2?.pairings.pending(id)
 	if (!pairing) return res.writeHead(404).end()
-	const [host, ...alternateHosts] = pairHosts(bridge)
+	const [host, ...alternateHosts] = pairHosts(bridge, bridge.tailnetHost)
 	const params = new URLSearchParams({
 		v: '2', host, port: String(Number(bridge.config?.port) || 48317), id,
 		key: bridge.relayV2.pairings.identity.publicKey, secret: pairing.secret, name: bridge.hostLabel(),
 	})
 	for (const alternate of alternateHosts) params.append('hostAlt', alternate)
+	if (bridge.tailnetHost) params.set('tailnetHost', bridge.tailnetHost)
 	const uri = `narwal://pair?${params}`
 	if (url.pathname === '/v2/pairing-uri') return replyJson(res, corsHeaders, { uri })
 	const { toQR } = await loadToqr(bridge)
