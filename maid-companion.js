@@ -1,9 +1,13 @@
 export const MAID_COMPANION_METHODS = new Map([
 	['getMaidAvatar', ['readAvatar', 'avatar']],
+	['getMaidProfile', ['readProfile', undefined, true]],
+	['setMaidName', ['saveName', 'name', true]],
+	['setMaidAvatar', ['saveAvatar', 'dataUrl', true]],
 	['getMaidNotebook', ['notebook']],
 	['getMaidPersona', ['readPersona']],
 	['setMaidPersona', ['savePersona', 'text']],
 	['getMaidMemory', ['searchMemory', 'query']],
+	['updateMaidMemory', ['updateMemory', 'memory']],
 ])
 
 const AVATAR_CHUNK_SIZE = 192 * 1024 // Align base64 chunks to three-byte groups.
@@ -13,7 +17,7 @@ function maidError(code, message) {
 }
 
 export async function invokeMaidCompanion(companion, method, args) {
-	const [name, parameter] = MAID_COMPANION_METHODS.get(method)
+	const [name, parameter, returnsProfile] = MAID_COMPANION_METHODS.get(method)
 	const operation = companion?.[name]
 	if (typeof operation !== 'function') {
 		if (typeof companion?.prepare === 'function') {
@@ -42,5 +46,7 @@ export async function invokeMaidCompanion(companion, method, args) {
 			nextOffset: end === image.body.length ? null : end,
 		}
 	}
-	return parameter === undefined ? operation.call(companion) : operation.call(companion, args[parameter])
+	const argument = parameter === 'memory' ? { id: args.id, topic: args.topic, scope: args.scope, fact: args.fact } : args[parameter]
+	const result = await operation.call(companion, argument)
+	return returnsProfile ? { name: result.name, avatarVersion: result.version } : result
 }
