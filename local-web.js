@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
+import { LocalWebSocket } from './local-web-socket.js'
 
 const TTL_MS = 30 * 60_000
 const IDLE_MS = 20_000
@@ -8,6 +9,8 @@ const MAX_RESOURCE_BYTES = 8 * 1024 * 1024
 const MAX_HEADER_BYTES = 8 * 1024
 const MAX_INFLIGHT = 6
 const MAX_DESKTOP_INFLIGHT = 24
+const MAX_SOCKETS_PER_PREVIEW = 4
+const MAX_DESKTOP_SOCKETS = 12
 const MAX_PATH_LENGTH = 4096
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
 const REQUEST_HEADERS = new Set([
@@ -19,6 +22,10 @@ const RESPONSE_HEADERS = new Set([
 	'content-security-policy', 'content-type', 'etag', 'expires', 'last-modified', 'vary', 'www-authenticate',
 	'x-content-type-options',
 ])
+const WEBSOCKET_REQUEST_HEADERS = new Set([
+	'cookie', 'authorization', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions',
+])
+const WEBSOCKET_RESPONSE_HEADERS = ['sec-websocket-accept', 'sec-websocket-protocol', 'sec-websocket-extensions']
 const BASE64 = /^(?:[a-z\d+/]{4})*(?:[a-z\d+/]{2}==|[a-z\d+/]{3}=)?$/i
 const CONTROL = /[\u0000-\u001f\u007f]/u
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost)(?::(\d{1,5}))?(?=[/?#]|$)/i
@@ -27,7 +34,8 @@ const LINK_IN_TEXT = /(?:^|[\s([<"'`，。！？、；：])[*_]*(http:\/\/[^\s<>
 const LINK_END = /[).,!?;\]}*_]+$/
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308])
 
-export const LOCAL_WEB_METHODS = new Set(['openLocalWeb', 'localWebRequest', 'localWebRead', 'localWebClose'])
+const WEBSOCKET_METHODS = new Set(['localWebSocketOpen', 'localWebSocketRead', 'localWebSocketWrite', 'localWebSocketClose'])
+export const LOCAL_WEB_METHODS = new Set(['openLocalWeb', 'localWebRequest', 'localWebRead', 'localWebClose', ...WEBSOCKET_METHODS])
 
 function error(reason, message) {
 	return Object.assign(new Error(message), { code: `narwal/local-web-${reason}` })
@@ -130,22 +138,33 @@ function finish(grant, record) {
 	record.request?.destroy()
 }
 
+function finishSocket(grant, socket) {
+	grant.sockets.delete(socket.id)
+	socket.close()
+}
+
+function closeExchanges(grant, device) {
+	for (const record of grant.responses.values()) {
+		if (!device || record.device === device) finish(grant, record)
+	}
+	for (const socket of grant.sockets.values()) {
+		if (!device || socket.device === device) finishSocket(grant, socket)
+	}
+}
+
 export function revokeLocalWeb(bridge, pairId) {
 	const grant = bridge.localWeb?.get(pairId)
 	if (!grant) return
 	bridge.localWeb.delete(pairId)
 	clearTimeout(grant.expiry)
-	for (const record of grant.responses.values()) finish(grant, record)
+	closeExchanges(grant)
 }
 
 export function closeLocalWebDevice(bridge, device) {
 	device.localWebOpening?.abort()
 	delete device.localWebOpening
 	const grant = bridge.localWeb?.get(device.tokenId)
-	if (!grant) return
-	for (const record of grant.responses.values()) {
-		if (record.device === device) finish(grant, record)
-	}
+	if (grant) closeExchanges(grant, device)
 }
 
 export function closeAllLocalWeb(bridge) {
@@ -175,7 +194,7 @@ function sharePort(bridge, pairId, port, fromLink) {
 	revokeLocalWeb(bridge, pairId)
 	const expiresAt = Date.now() + TTL_MS
 	const expiry = setTimeout(() => revokeLocalWeb(bridge, pairId), TTL_MS).unref()
-	const grant = { port, expiresAt, expiry, fromLink, responses: new Map() }
+	const grant = { port, expiresAt, expiry, fromLink, responses: new Map(), sockets: new Map() }
 	grantStore(bridge).set(pairId, grant)
 	return grant
 }
@@ -187,7 +206,12 @@ export function grantLocalWeb(bridge, pairId, port) {
 
 function requestBody(method, encoded) {
 	if (encoded === undefined || encoded === '') return undefined
-	if (method === 'GET' || method === 'HEAD' || typeof encoded !== 'string') throw invalid()
+	if (method === 'GET' || method === 'HEAD') throw invalid()
+	return decodeBlock(encoded)
+}
+
+function decodeBlock(encoded) {
+	if (typeof encoded !== 'string') throw invalid()
 	if (encoded.length > Math.ceil(CHUNK_BYTES / 3) * 4) throw tooLarge()
 	if (!BASE64.test(encoded)) throw invalid()
 	const body = Buffer.from(encoded, 'base64')
@@ -195,7 +219,7 @@ function requestBody(method, encoded) {
 	return body
 }
 
-function requestHeaders(grant, raw, body) {
+function requestHeaders(grant, raw, body, allowed = REQUEST_HEADERS) {
 	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalid()
 	const headers = { host: new URL(grant.origin).host, 'accept-encoding': 'identity' }
 	let size = 0
@@ -204,7 +228,7 @@ function requestHeaders(grant, raw, body) {
 		if (typeof value !== 'string' || CONTROL.test(value)) throw invalid()
 		size += Buffer.byteLength(key) + Buffer.byteLength(value)
 		if (size > MAX_HEADER_BYTES) throw tooLarge()
-		if (REQUEST_HEADERS.has(name)) headers[name] = value
+		if (allowed.has(name)) headers[name] = value
 		if (name === 'origin') headers.origin = grant.origin
 		if (name === 'referer') {
 			try {
@@ -240,6 +264,11 @@ function sameHostCookie(cookie, hostname) {
 	return [value, ...attributes.filter(attribute => !removeDomain.test(attribute))].join(';')
 }
 
+function responseCookies(grant, response) {
+	const hostname = new URL(grant.origin).hostname
+	return (response.headers['set-cookie'] ?? []).map(cookie => sameHostCookie(cookie, hostname)).filter(Boolean)
+}
+
 function responseMetadata(grant, path, response) {
 	const status = response.statusCode
 	if (!status || status < 200) throw unavailable()
@@ -250,8 +279,7 @@ function responseMetadata(grant, path, response) {
 	}
 	const location = response.headers.location
 	if (typeof location === 'string' && REDIRECT_CODES.has(status)) headers.location = redirectPath(grant, path, location)
-	const hostname = new URL(grant.origin).hostname
-	const cookies = (response.headers['set-cookie'] ?? []).map(cookie => sameHostCookie(cookie, hostname)).filter(Boolean)
+	const cookies = responseCookies(grant, response)
 	if (Buffer.byteLength(JSON.stringify({ headers, cookies })) > MAX_HEADER_BYTES) throw tooLarge()
 	return { status, headers, ...(cookies.length ? { cookies } : {}) }
 }
@@ -333,6 +361,55 @@ async function start(bridge, grant, device, args) {
 	}
 }
 
+async function openSocket(bridge, grant, device, args) {
+	const path = safePath(args.path)
+	const headers = requestHeaders(grant, args.headers, undefined, WEBSOCKET_REQUEST_HEADERS)
+	if (!headers.origin || headers['sec-websocket-version'] !== '13' ||
+		!/^[A-Za-z\d+/]{22}==$/.test(headers['sec-websocket-key'] ?? '')) throw invalid()
+	headers.connection = 'Upgrade'
+	headers.upgrade = 'websocket'
+	const total = [...bridge.localWeb.values()].reduce((count, sharing) => count + sharing.sockets.size, 0)
+	if (grant.sockets.size >= MAX_SOCKETS_PER_PREVIEW || total >= MAX_DESKTOP_SOCKETS) {
+		throw error('busy', '当前网页连接太多，请稍后重试。')
+	}
+	const socket = new LocalWebSocket(device, CHUNK_BYTES)
+	grant.sockets.set(socket.id, socket)
+	try {
+		const response = await socket.open(grant.port, path, headers, MAX_HEADER_BYTES)
+		if (!grant.sockets.has(socket.id)) throw notShared()
+		if (response.statusCode !== 101 || response.headers.upgrade?.toLowerCase() !== 'websocket' ||
+			typeof response.headers['sec-websocket-accept'] !== 'string') throw unavailable()
+		const negotiated = {}
+		for (const name of WEBSOCKET_RESPONSE_HEADERS) {
+			if (typeof response.headers[name] === 'string') negotiated[name] = response.headers[name]
+		}
+		const cookies = responseCookies(grant, response)
+		if (Buffer.byteLength(JSON.stringify({ headers: negotiated, cookies })) > MAX_HEADER_BYTES) throw tooLarge()
+		return { socketId: socket.id, headers: negotiated, cookies }
+	} catch (cause) {
+		finishSocket(grant, socket)
+		throw cause
+	}
+}
+
+async function invokeWebSocket(bridge, grant, device, method, args) {
+	if (method === 'localWebSocketOpen') return openSocket(bridge, grant, device, args)
+	const socket = grant.sockets.get(args.socketId)
+	if (method === 'localWebSocketClose') {
+		if (socket?.device === device) finishSocket(grant, socket)
+		return { ok: true }
+	}
+	if (!socket || socket.device !== device) throw unavailable()
+	if (method === 'localWebSocketWrite') {
+		await socket.write(decodeBlock(args.body))
+		return { ok: true }
+	}
+	const block = await socket.read()
+	if (!grant.sockets.has(socket.id)) throw notShared()
+	if (block.eof) finishSocket(grant, socket)
+	return block
+}
+
 async function openLocalWeb(bridge, device, args, grant) {
 	const target = parseService(args.url)
 	ensureUserPort(bridge, target.port)
@@ -347,7 +424,7 @@ async function openLocalWeb(bridge, device, args, grant) {
 			if (!published) throw error('link-required', '只能直接预览桌面会话提供的本地网页。')
 			grant = sharePort(bridge, device.tokenId, target.port, true)
 		}
-		for (const record of grant.responses.values()) finish(grant, record)
+		closeExchanges(grant)
 		grant.origin = target.origin
 		grant.id = randomUUID()
 		return { id: grant.id, path: target.path }
@@ -364,6 +441,7 @@ export async function invokeLocalWeb(bridge, device, method, args) {
 	if (!grant || typeof args.id !== 'string' || grant.id !== args.id || !grant.origin) throw notShared()
 	ensureUserPort(bridge, grant.port)
 	try {
+		if (WEBSOCKET_METHODS.has(method)) return await invokeWebSocket(bridge, grant, device, method, args)
 		if (method === 'localWebRequest') return await start(bridge, grant, device, args)
 		if (method === 'localWebClose') {
 			if (grant.fromLink) revokeLocalWeb(bridge, device.tokenId)
