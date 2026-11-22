@@ -101,6 +101,17 @@ export function handleDeviceFrame(bridge, device, text) {
 		})
 		return
 	}
+	if (ns === 'narwal' && method === 'attachmentUpload') {
+		void bridge.attachmentUploads.invoke(device, args).then(value => {
+			sendResult({ id, ok: true, value })
+		}).catch(error => {
+			const code = error?.code
+			const known = typeof code === 'string' && code.startsWith('narwal/upload-')
+			sendResult({ id, ok: false, error: known ? { code, message: error.message }
+				: { code: 'narwal/upload-unavailable', message: '桌面暂时无法上传此附件。' } })
+		})
+		return
+	}
 	if (ns === 'narwal' && ['getMaid', 'installMaid', 'enableMaid'].includes(method)) {
 		if (!device.transport || !device.peer) {
 			sendResult({ id, ok: true, value: { kind: 'unavailable' } })

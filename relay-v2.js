@@ -218,6 +218,7 @@ class RelayV2 {
 	revoke(id) {
 		this.bridge.push?.revoke(id)
 		this.pairings.revoke(id)
+		this.bridge.attachmentUploads.revoke(id)
 		this.bridge.push?.flushRevocations()
 		this.stopDialer(id)
 		this.active.get(id)?.terminate()

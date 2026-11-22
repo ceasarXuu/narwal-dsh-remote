@@ -1,17 +1,3 @@
-/**
- * Narwal Server — host half (protocol v1 bridge, 0.2.0).
- *
- * Responsibilities:
- *   1. HTTP + ws on config.port; token auth at upgrade (/ws) and on admin routes
- *   2. per-device in-process Peer (owner principal) via ctx.connection.createPeer
- *   3. unary bridge  : ctx.typertGateway.invoke({namespace, method, args, peer})
- *   4. stream bridge : ctx.typertGateway.stream(...), explicit unsubscribe/close
- *   5. fan-out       : api-session/{added,removed,status,activity,error} per device
- *   6. pairing tokens: durable plugin-owned file store under $DSH_HOME
- *                      (config doc page only holds visual params now)
- *   7. routes        : /qr.svg (pairing QR), /stats (devices), /tokens (admin)
- */
-
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { once } from 'node:events'
@@ -20,14 +6,15 @@ import { homedir, hostname, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { supportsArtifactDownloads } from './artifact-downloads.js'
+import { AttachmentUploads } from './attachment-uploads.js'
 import { configuredTailnetHost, handlePanelRequest } from './bridge-panel.js?websocket-preview'
-import { handleDeviceFrame } from './bridge-rpc.js?websocket-preview'
+import { handleDeviceFrame } from './bridge-rpc.js?attachment-upload'
 import { createGitHubProjectsInstaller } from './github-projects-install.js'
 import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js?websocket-preview'
 import { createMaidInstaller } from './maid-install.js?profile'
 import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?final-reply'
 import { createPushNotifications, listenForPushRequests } from './push-notifications.js?live-activity'
-import { loadRelayV2 } from './relay-v2.js?task-actions'
+import { loadRelayV2 } from './relay-v2.js?attachment-upload'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
 import { TrafficUsage } from './traffic-usage.js'
@@ -89,6 +76,7 @@ class NarwalBridge {
 		this.tailnetHost = configuredTailnetHost(config?.tailnetHost, this.log)
 		this.traffic = new TrafficUsage(this.store.dir, this.log)
 		this.todayTokenUsage = new TodayTokenUsage(ctx)
+		this.attachmentUploads = new AttachmentUploads(this)
 		this.devices = new Map()
 		this.stopping = false
 		this.fanoutOffs = []
@@ -227,7 +215,7 @@ class NarwalBridge {
 		this.traffic.close()
 		this.todayTokenUsage.close()
 		this.log.info('bridge stopped; devices disposed')
-		return this.stopTask
+		return this.stopTask = Promise.all([this.stopTask, this.attachmentUploads.close()])
 	}
 
 	listenForHostEvents() {
@@ -357,6 +345,7 @@ class NarwalBridge {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, sessionTranscript: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
+				...(transport && this.attachmentUploads.available && { resumableUploads: true }),
 				push: device.pushLocal === true, liveActivity: Boolean(transport && this.push?.liveActivities?.enabled),
 				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,
 			},
