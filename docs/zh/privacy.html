@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="公开草稿，供审阅。">
-  <title>隐私政策 · 草稿 · Narwal</title>
+  <meta name="description" content="了解 Narwal 如何处理配对、会话、附件和通知相关信息，以及如何管理授权和行使个人信息权利。">
+  <title>隐私政策 · Narwal</title>
   <link rel="alternate" hreflang="en" href="../privacy.html">
   <link rel="icon" href="../narwal.png">
   <link rel="stylesheet" href="../site.css">
@@ -19,13 +19,65 @@
   </div></header>
   <main class="frame legal">
     <h1>隐私政策</h1>
-    <p class="draft">公开草稿，供审阅。</p>
-    <section><h2>适用范围</h2><p>本草稿涵盖本站和 Narwal 连接 DeepSeek Harness（DSH）的功能。</p></section>
-    <section><h2>直连、凭据与日志</h2><p>直连模式下，Narwal App 在本地网络上与 DSH 插件交换所请求的会话内容、指令和结果。插件在桌面端保存配对令牌。配对二维码和链接包含连接凭据。插件也会为部分管理操作记录本地日志，其中可能包含设备标签、令牌标识及时间。</p></section>
-    <section><h2>可选中继与外部服务</h2><p>如果启用中继，连接流量会经过所配置的中继服务。DSH 调用的模型和其他服务按各自的政策处理数据。</p></section>
-    <section><h2>本站与反馈渠道</h2><p>本站不加载项目自己的分析脚本或外部字体。本站由 GitHub Pages 托管，GitHub 可能处理访问者的 IP 地址等访问数据。请参阅 <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub 隐私声明</a>。GitHub Issues 公开可见。</p></section>
-    <section><h2>管理访问与联系</h2><p>可在 DSH 设置中撤销配对令牌，并在 App 中移除已保存的连接。可通过 <a href="https://github.com/ceasarXuu/narwal-dsh-remote/issues">GitHub Issues</a> 询问如何提交私密报告，请勿贴出令牌、配对链接、日志或会话内容。</p></section>
+    <p class="legal-date">更新日期 <time datetime="2026-11-22">2026 年 11 月 22 日</time></p>
+    <p>本政策适用于由【运营者全称】（下称「我们」）提供的 Narwal 移动 App、Narwal 桌面插件、Narwal 官网及由我们运营的连接和通知服务。</p>
+
+    <section>
+      <h2>一、配对与会话</h2>
+      <p>局域网直连无需注册 Narwal 账号。配对时，移动端与桌面插件会处理桌面名称、局域网地址和端口、应用生成的设备或配对标识，以及令牌或密钥等凭据，用于识别设备、验证连接和恢复配对。移动端凭据保存在系统安全存储中。在 iOS 上使用钥匙串。桌面插件在 Mac 上保存配对记录，部分本地管理日志可能记录设备标签、令牌标识和操作时间。</p>
+      <p>当你从移动端查看或操作桌面会话时，App 与已配对的 Mac 交换完成该操作所需的信息，例如工作区和会话信息、你发送的指令和附件、AI 回复、工具运行结果及你请求预览的文件或网页。会话记录由桌面 DSH 保存。直连的会话内容在两端之间传输。我们不提供 Narwal 云端聊天历史，也不把聊天、代码或附件用于广告、跨应用追踪或训练 Narwal 模型。</p>
+      <p><strong>请在可信局域网使用旧版直连。旧版直连的 WebSocket 没有传输加密。</strong> 支持安全配对的新版连接对会话数据使用端到端加密。通过新版安全中继连接时，中继只转发这条通道的密文。中继入口可见来源 IP、连接时间和流量大小等网络信息。自营中继处理随机路由标识、接入凭据校验值和用量记录，用于认证、转发、防滥用与管理流量额度。若手动配置了兼容旧版协议的中继，该协议不提供端到端加密，请向该中继的运营者核对其数据处理规则。</p>
+    </section>
+
+    <section>
+      <h2>二、系统权限与设备上的信息</h2>
+      <ul>
+        <li><strong>相机与本地网络。</strong> 相机用于扫描桌面配对二维码，扫码画面在设备上处理。本地网络权限用于发现和连接 Mac。关闭相关权限后，扫码或局域网连接可能不可用。</li>
+        <li><strong>位置权限与 Wi-Fi。</strong> 系统可能要求开启使用期间的位置权限，App 用它显示当前 Wi-Fi 名称，方便核对两台设备是否在同一网络。此功能无需读取地理坐标。拒绝授权时仍可在系统设置中手动核对 Wi-Fi。</li>
+        <li><strong>照片与文件。</strong> App 处理你通过系统选择器选中的照片或文件，例如发送到 DSH 会话的附件，或你设置的桌面助手头像。你选择上传或下载预览的文件可能保存在移动端缓存中。你经系统分享或另存到其他位置的副本由目标应用或存储位置管理。</li>
+        <li><strong>通知与 Apple 设备。</strong> 本地任务通知可在设备上展示会话或工作区名称及简短回复预览。受支持的版本启用远程通知后，Narwal 推送服务和 Apple 推送通知服务（APNs）会处理设备令牌、订阅和投递标识，以及通用提醒。用于在设备上还原详情的信息以密文传输。使用锁屏实时活动时，推送服务和 APNs 另行处理活动令牌、语言和任务状态（例如是否正在运行、待答数量）。小组件和配对的 Apple Watch 可显示任务状态、数量或用量等摘要。锁屏可见内容可以通过系统的通知预览或实时活动设置控制。<a href="https://www.apple.com/legal/privacy/">Apple 隐私政策</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>三、外部服务和数据传输</h2>
+      <ul>
+        <li><strong>模型与第三方 AI 服务。</strong> 当你向会话发出指令时，桌面 DSH 会按你在桌面上选择或配置的服务处理请求。为生成结果，DSH 可能把指令、附件、会话上下文或相关工作区内容发送给所配置的模型提供商。使用前请核对桌面显示的模型提供商及其数据处理规则，相关数据的保存、使用和删除适用该提供商的政策。DeepSeek Harness 对 DeepSeek 官方模型和自行配置的第三方模型有不同的处理说明。Narwal 也可通过桌面显示用量、余额等信息。查询余额所用的 API 密钥在桌面端交由对应服务验证。<a href="https://www.deepseek.com/harness/privacy/">DeepSeek Harness 隐私政策</a></li>
+        <li><strong>GitHub 与 npm。</strong> 如果你使用 GitHub Projects 功能，桌面插件会根据桌面端授权访问你请求查看的项目和议题信息。GitHub Pages 托管官网，访问时 GitHub 可能处理 IP 地址、浏览器信息和访问请求。官网页面未接入 Narwal 自有的访问分析脚本。桌面插件安装或检查更新时，npm 注册表会收到包请求和相应的网络信息。<a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub 隐私声明</a></li>
+        <li><strong>托管与支持。</strong> 我们在中国大陆使用腾讯云托管自营中继和推送服务。你主动联系支持时，我们处理你的联系方式、问题描述和你选择提交的材料，用于回复、排查问题和处理权利请求。QQ 群和 GitHub Issues 适合讨论一般问题，涉及个人信息请使用下方的联系邮箱。<a href="https://www.tencentcloud.com/document/product/301/17345">腾讯云隐私政策</a></li>
+      </ul>
+      <p>你访问的第三方服务或自行配置的中继可能在你所在国家或地区之外处理信息。我们委托服务商处理数据时，会按适用法律约束其用途和保护措施。若我们依法需要向境外提供个人信息，会在适用时告知境外接收方和处理情况、履行所需手续，并在法律要求时取得单独同意。我们也可能按法律规定或有权机关的合法要求，在必要范围内提供相关信息。</p>
+      <p>我们依据适用法律，在履行你请求的服务或法定义务所必需的范围内处理个人信息，并在依法需要同意时征求同意。</p>
+    </section>
+
+    <section>
+      <h2>四、保存期限与安全</h2>
+      <ul>
+        <li><strong>设备上的数据。</strong> 配对记录按设备保留，直至你在移动端移除或在桌面端撤销对应记录。会话和备份按 DSH 及你的设备设置管理。桌面插件的本地诊断记录保留在 Mac 上，可按设备管理规则清理。App 设置、近期跳转记录和预览缓存存放在移动设备上。iOS 钥匙串中的配对信息可能在卸载后仍然保留，停止使用前可先在 App 中移除配对。</li>
+        <li><strong>中继。</strong> 会话密文在转发所需的时间内缓冲。自营中继的邀请、路由和额度记录按凭据有效期管理，过期时由服务定期清理。</li>
+        <li><strong>推送。</strong> 通知令牌用于维持订阅，关闭通知的设置同步后或撤销配对后停止使用相应令牌。普通推送的事件密文在处理结束、取消或超时后清除。系统会在投递有效期结束约一天后定期清理投递记录。锁屏实时活动到期或撤销后，服务清除相应令牌。撤销后用于阻止旧登记重新启用的订阅标识和凭据校验记录当前不会自动到期，可就这些记录向我们提出删除请求。</li>
+        <li><strong>支持记录。</strong> 我们按解决问题、处理权利请求和履行法定义务所需的最短期限保存支持记录。</li>
+      </ul>
+      <p>我们使用系统安全存储、配对认证以及服务访问控制来保护信息。若发生涉及个人信息的安全事件，我们会采取必要的补救措施，并按适用法律履行通知和报告义务。</p>
+    </section>
+
+    <section>
+      <h2>五、管理授权和行使你的权利</h2>
+      <p>你可以在 Narwal 的「设置」中关闭任务提醒，在系统设置中管理相机、本地网络、位置、照片和通知权限。关闭通知后，已送达的通知可在系统通知中心移除。要停止桌面访问，请在 DSH 的 Narwal 插件设置中撤销对应配对，并在移动端「设置」中移除该桌面。桌面会话和已导出的文件可在各自保存位置管理。</p>
+      <p>你可以通过下方邮箱请求查阅、复制、更正、补充或删除我们处理的个人信息，撤回同意、要求解释处理规则，并在符合适用法律条件时请求转移个人信息，或要求限制、拒绝相关处理。我们会按适用法律处理和回复，也可能为保护你的信息核实请求所涉及的身份或设备。撤回同意不影响撤回前依法进行的处理。你也可以向有管辖权的监管机构投诉。</p>
+    </section>
+
+    <section>
+      <h2>六、未成年人</h2>
+      <p>Narwal 面向需要访问桌面开发环境的用户。未成年人应在监护人指导下使用。未满 14 周岁的儿童请勿自行向我们提交个人信息。若我们发现未依法取得监护人同意而收到了儿童的个人信息，会依法采取删除等措施。监护人可以通过下方邮箱联系我们。</p>
+    </section>
+
+    <section>
+      <h2>七、更新与联系</h2>
+      <p>本政策自发布之日起生效。最新版可从 Narwal 的「设置 → 关于」和本网站查阅。我们会以适当方式提示重大变化，并在法律要求时重新征求同意。</p>
+      <p>如需行使个人信息权利、报告隐私问题或了解具体处理情况，请发邮件至【隐私联系邮箱】。请避免在公开渠道提交配对二维码、令牌、密钥、聊天记录或未脱敏日志。</p>
+    </section>
   </main>
-  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">隐私政策 · 草稿</a><a href="service.html">服务声明 · 草稿</a></div></div></footer>
+  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">隐私政策</a><a href="service.html">服务声明</a></div></div></footer>
 </body>
 </html>

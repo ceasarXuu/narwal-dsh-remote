@@ -57,4 +57,4 @@ NARWAL_NOISE_DIR=/path/to/Narwal/packages/relay-crypto/dist/node npm run pack --
 
 将生成的压缩包装入 DSH profile。私有包自带原生扩展和桥接运行时，通过本地压缩包分发。目标主机可以直接加载包内扩展，无需设置 `NARWAL_NOISE_DIR` 或检出 Narwal 源码。
 
-[隐私政策草稿](https://ceasarxuu.github.io/narwal-dsh-remote/zh/privacy.html) · [服务声明草稿](https://ceasarxuu.github.io/narwal-dsh-remote/zh/service.html) · [MIT 许可](LICENSE)
+[隐私政策](https://ceasarxuu.github.io/narwal-dsh-remote/zh/privacy.html) · [服务声明](https://ceasarxuu.github.io/narwal-dsh-remote/zh/service.html) · [MIT 许可](LICENSE)

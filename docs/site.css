@@ -47,7 +47,10 @@ footer { background: var(--surface); padding-block: 32px; }
 .legal h1 { margin-bottom: 1.4rem; }
 .legal section { margin-top: 1.9rem; }
 .legal a, .setup a { color: var(--accent); }
-.draft { background: var(--surface); padding: .9em 1.1em; }
+.legal-date { color: var(--accent); font-size: .88rem; margin-bottom: .8rem; }
+.legal p + p { margin-top: .85rem; }
+.legal ul { padding-inline-start: 1.25em; }
+.legal li + li { margin-top: .65rem; }
 @media (max-width: 810px) {
   .steps { grid-template-columns: 1fr; gap: 1.5rem; }
   .hero-end { align-items: flex-start; flex-direction: column; }

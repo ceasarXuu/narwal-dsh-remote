@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Public draft for review.">
-  <title>Privacy Policy · Draft · Narwal</title>
+  <meta name="description" content="Learn how Narwal handles pairing, sessions, attachments and notifications, and how to manage permissions and exercise your privacy rights.">
+  <title>Privacy Policy · Narwal</title>
   <link rel="alternate" hreflang="zh-CN" href="zh/privacy.html">
   <link rel="icon" href="./narwal.png">
   <link rel="stylesheet" href="./site.css">
@@ -19,13 +19,65 @@
   </div></header>
   <main class="frame legal">
     <h1>Privacy Policy</h1>
-    <p class="draft">Public draft for review.</p>
-    <section><h2>Scope</h2><p>This draft covers this website and Narwal’s connection to DeepSeek Harness (DSH).</p></section>
-    <section><h2>Direct connections, credentials, and logs</h2><p>In direct mode, the Narwal app and DSH plugin exchange requested session content, commands, and responses on your local network. The desktop plugin stores pairing tokens. Pairing QR codes and links contain credentials. The plugin also logs some administrative events locally, which may include device labels, token identifiers, and timestamps.</p></section>
-    <section><h2>Optional relay and external services</h2><p>If you enable a relay, connection traffic passes through the relay you configure. Model providers and other services used by DSH handle data under their own policies.</p></section>
-    <section><h2>Website and feedback</h2><p>This site loads no project analytics scripts or external fonts. GitHub Pages hosts the site and GitHub may process access data such as IP addresses. See the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a>. GitHub Issues are public.</p></section>
-    <section><h2>Managing access and contacting us</h2><p>You can revoke pairing tokens in DSH and remove saved connections in the app. Use <a href="https://github.com/ceasarXuu/narwal-dsh-remote/issues">GitHub Issues</a> to ask how to submit a private report. Keep tokens, pairing links, logs, and session content out of public posts.</p></section>
+    <p class="legal-date">Updated <time datetime="2026-11-22">November 22, 2026</time></p>
+    <p>This policy applies to the Narwal mobile app, Narwal desktop plugin, this website, and connection and notification services operated by [Operator’s full legal name] (“we” or “us”).</p>
+
+    <section>
+      <h2>1. Pairing and desktop sessions</h2>
+      <p>Direct connections on your local network require no Narwal account. To identify devices, authenticate connections and restore pairings, the app and the plugin process the desktop name, local network address and port, generated device or pairing identifiers, and credentials such as tokens or keys. The mobile app uses the operating system’s secure storage for pairing credentials, including Keychain on iOS. The plugin saves pairing records on your Mac. Local administrative logs may include device labels, token identifiers and timestamps.</p>
+      <p>When you view or control a desktop session, the app and your paired Mac exchange the information needed for the operation. This can include workspace and session information, instructions and attachments you send, AI responses, tool results, and files or web pages you ask to preview. Desktop DSH stores session histories. On a direct connection, session content travels between the paired devices. We provide no Narwal cloud chat history, and we do not use your chats, code or attachments for advertising, cross-app tracking or training Narwal models.</p>
+      <p><strong>Use legacy direct connections only on a trusted local network. Their WebSocket traffic is unencrypted.</strong> Newer connections with secure pairing use end-to-end encryption for session data. On the newer secure relay, the relay forwards ciphertext from that encrypted channel. The relay endpoint can see network metadata such as source IP addresses, connection timing and traffic sizes. Our relay processes random route identifiers, credential verification data and usage records to authenticate connections, forward traffic, prevent abuse and manage allowances. If you manually configure a relay using the legacy protocol, that protocol does not provide end-to-end encryption. Check that relay operator’s data practices.</p>
+    </section>
+
+    <section>
+      <h2>2. System permissions and data on your devices</h2>
+      <ul>
+        <li><strong>Camera and local network.</strong> The camera scans the desktop pairing code and processes the image on your device. Local network access lets the app find and connect to your Mac. Turning these permissions off may disable scanning or local connections.</li>
+        <li><strong>Location permission and Wi-Fi.</strong> Your operating system may require access to location while using the app so Narwal can show your current Wi-Fi network name. This helps you check that the devices are on the same network. The feature does not read geographic coordinates. If you decline access, you can check the network name in your system settings.</li>
+        <li><strong>Photos and files.</strong> The app handles items you select in the system picker, such as attachments you send to a DSH session or an image you select for your desktop assistant’s profile. Files you select for upload or download for preview may remain in the app cache. Copies you share or save elsewhere are managed by the destination you choose.</li>
+        <li><strong>Notifications and Apple devices.</strong> Local task notifications can include the session or workspace name and a short reply preview. If you enable remote notifications on a supported version, the Narwal notification service and Apple Push Notification service (APNs) process device tokens, registration and delivery identifiers, and a generic alert. Details for display on your device travel in an encrypted payload. Lock Screen Live Activities use a separate activity token, language and task status such as running or the number of unanswered questions. Widgets and a paired Apple Watch can display summaries such as status, counts or usage. You can control what appears on your lock screen through system settings for notification previews and Live Activities. <a href="https://www.apple.com/legal/privacy/">Apple Privacy Policy</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>3. External services and data transfers</h2>
+      <ul>
+        <li><strong>Models and third-party AI services.</strong> When you send an instruction to a session, desktop DSH processes the request using the provider selected or configured on your desktop. DSH can send your instructions, attachments, session context or relevant workspace content to that provider to generate a response. Check the selected provider and its data practices before sending anything. The provider’s policy governs how it retains, uses and deletes the data it receives. DeepSeek Harness describes separate practices for official DeepSeek models and models you configure yourself. Narwal can also display usage and balance information from the desktop. API keys used for balance checks are presented to the relevant provider by the desktop. <a href="https://www.deepseek.com/harness/privacy/">DeepSeek Harness Privacy Policy (Chinese)</a></li>
+        <li><strong>GitHub and npm.</strong> If you use GitHub Projects, the desktop plugin uses the authorization configured on your desktop to retrieve the projects and issues you request. GitHub Pages hosts this website. GitHub may process IP addresses, browser details and web requests. This site does not use a Narwal analytics script. When the desktop plugin is installed or checks for updates, the npm registry receives package requests and associated network information. <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub Privacy Statement</a></li>
+        <li><strong>Hosting and support.</strong> We use Tencent Cloud in mainland China to host the relay and notification services we operate. If you contact us, we use your contact details, description and materials you choose to submit to respond, investigate and handle rights requests. Use the email address below for private matters. The QQ group and GitHub Issues are for general discussion. <a href="https://www.tencentcloud.com/document/product/301/17345">Tencent Cloud Privacy Policy</a></li>
+      </ul>
+      <p>Third-party services you use and any relay you configure may process information outside your country or region. When service providers process data on our behalf, we limit their use of it and require safeguards under applicable law. When we transfer personal information internationally, we provide information about the recipient and processing, put required safeguards in place, and seek separate consent where the law requires it. We may also disclose information to the extent required by law or a lawful request from a competent authority.</p>
+      <p>We process personal information as necessary to provide the service you request or meet our legal obligations, and seek consent when required by applicable law.</p>
+    </section>
+
+    <section>
+      <h2>4. Retention and security</h2>
+      <ul>
+        <li><strong>Device data.</strong> Pairing records remain on each device until you remove them in the app or revoke them on the desktop, respectively. DSH and device settings govern desktop sessions and backups. The desktop plugin’s diagnostic records stay on the Mac and can be cleared under your device’s data management rules. Mobile settings, recent navigation references and preview caches stay on your mobile device. The iOS Keychain may keep pairing information after you uninstall the app. You can remove saved pairings before uninstalling.</li>
+        <li><strong>Relay.</strong> The relay buffers encrypted session data for forwarding. Our relay tracks invitations, routes and usage according to the credential’s validity period and periodically clears expired records.</li>
+        <li><strong>Push notifications.</strong> Notification tokens support active registrations. The service stops using them when disabling notifications takes effect or the pairing is revoked. Encrypted task alerts are cleared when processing finishes, delivery is canceled, or the alert expires. The service periodically clears the associated delivery records about a day after expiry. Live Activity tokens are cleared when the activity expires or the registration is revoked. Revoked registration identifiers and credential verification records prevent reuse and currently do not expire automatically. You can contact us to request deletion.</li>
+        <li><strong>Support.</strong> We keep support records only as long as needed to resolve the issue, handle privacy requests or meet legal obligations.</li>
+      </ul>
+      <p>We use operating system secure storage, pairing authentication and access controls to protect information. If a security incident affects personal information, we will take appropriate remedial measures and make notices and reports as required by applicable law.</p>
+    </section>
+
+    <section>
+      <h2>5. Permissions and your privacy rights</h2>
+      <p>To turn off task alerts, open Settings in Narwal. Manage camera, local network, location, photo and notification permissions in your system settings. You can clear delivered alerts in Notification Center. To end desktop access, revoke the pairing in the Narwal plugin’s DSH settings and remove the desktop in the mobile app’s Settings. Manage desktop sessions and exported files where they were saved.</p>
+      <p>Use the email below to request access to, a copy of, correction, completion or deletion of personal information we process, to withdraw consent or ask how information is handled. Where applicable, you may also request portability or ask us to restrict or stop processing. We respond as required by applicable law and may verify your identity or the device involved to protect your information. Withdrawal does not affect lawful processing that took place before withdrawal. You may also complain to a competent regulator.</p>
+    </section>
+
+    <section>
+      <h2>6. Children</h2>
+      <p>Narwal is intended for users who need access to a desktop development environment. Minors should use it with guidance from a parent or guardian. Children under 14 should not submit personal information to us on their own. If we learn that we received a child’s personal information without legally required parental consent, we will take appropriate action, including deletion as required by law. Parents and guardians can reach us at the address below.</p>
+    </section>
+
+    <section>
+      <h2>7. Updates and contact</h2>
+      <p>This policy takes effect on publication. The current version is available here and in Narwal under Settings → About. We will give appropriate notice of significant changes and seek renewed consent where required by law.</p>
+      <p>To exercise your rights, raise a privacy concern or ask about a specific processing activity, email [Privacy contact email]. Keep pairing codes, tokens, keys, chat histories and unredacted logs out of public channels.</p>
+    </section>
   </main>
-  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">Privacy Policy · Draft</a><a href="service.html">Service Statement · Draft</a></div></div></footer>
+  <footer><div class="frame footer-links"><a class="brand" href="./">Narwal</a><div><a href="privacy.html">Privacy Policy</a><a href="service.html">Terms of Service</a></div></div></footer>
 </body>
 </html>
