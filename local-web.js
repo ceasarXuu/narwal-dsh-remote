@@ -99,8 +99,12 @@ function safePath(path) {
 
 function containsServiceLink(text, target) {
 	if (typeof text !== 'string') return false
-	for (const [, href] of text.matchAll(LINK_IN_TEXT)) {
+	for (const [match, candidate] of text.matchAll(LINK_IN_TEXT)) {
 		try {
+			// A Markdown link can display the same URL it opens.
+			const separator = match.startsWith('[') ? candidate.indexOf('](') : -1
+			const label = separator === -1 ? '' : candidate.slice(0, separator)
+			const href = label && candidate.slice(separator + 2).startsWith(`${label})`) ? label : candidate
 			const content = href.replace(LINK_END, '')
 			const link = parseService(content)
 			// Ignore delimiters surrounding the URL while preserving punctuation in the tapped path.
