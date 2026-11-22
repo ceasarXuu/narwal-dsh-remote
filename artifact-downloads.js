@@ -43,7 +43,7 @@ function metadata(name, contentType, size, ...identity) {
 	if (!Number.isSafeInteger(size) || size < 0) throw unavailable()
 	if (size > MAX_ARTIFACT_BYTES) throw artifactError('too-large', '文件超过 128 MiB 下载上限。')
 	const version = createHash('sha256').update(JSON.stringify(identity)).digest('base64url')
-	return { name, mimeType: contentType, size, version }
+	return { name, mimeType: contentType, size, version, rangeReads: true }
 }
 
 function requestReference({ sessionId, ref }) {
@@ -175,9 +175,10 @@ export function supportsArtifactDownloads(ctx) {
 
 export async function invokeArtifactDownload(ctx, method, args) {
 	const { sessionId, ref } = requestReference(args)
-	const { offset, version } = args
+	const { offset, version, length = CHUNK_BYTES } = args
 	const isRead = method === 'readArtifact'
-	if (isRead && (!Number.isSafeInteger(offset) || offset < 0 || typeof version !== 'string' || version.length !== 43)) {
+	if (isRead && (!Number.isSafeInteger(offset) || offset < 0 || typeof version !== 'string' || version.length !== 43
+		|| !Number.isSafeInteger(length) || length < 1 || length > CHUNK_BYTES)) {
 		throw artifactError('bad-request', '无效的文件分段。')
 	}
 	const signal = AbortSignal.timeout(8000)
@@ -188,10 +189,10 @@ export async function invokeArtifactDownload(ctx, method, args) {
 		if (!isRead) return meta
 		if (version !== meta.version) throw changed()
 		if (offset > meta.size) throw artifactError('bad-request', '文件分段超出了文件末尾。')
-		const length = Math.min(CHUNK_BYTES, meta.size - offset)
-		if (!length) return { data: '' }
-		const bytes = await read(offset, length)
-		if (bytes?.byteLength !== length) throw changed()
+		const bytesToRead = Math.min(length, meta.size - offset)
+		if (!bytesToRead) return { data: '' }
+		const bytes = await read(offset, bytesToRead)
+		if (bytes?.byteLength !== bytesToRead) throw changed()
 		return { data: Buffer.from(bytes).toString('base64') }
 	} catch (error) {
 		if (typeof error?.code === 'string' && error.code.startsWith('narwal/artifact-')) throw error
