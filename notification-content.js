@@ -25,7 +25,7 @@ export function notificationTitles(ctx, sessionId, liveSession) {
 	try {
 		const session = liveSession ?? ctx.get('sessions')?.get?.(sessionId)
 		if (session) {
-			const projection = ctx.get('sessionProjections')?.cachedSnapshot?.(session, ['title'])
+			const projection = ctx.get('sessionProjections')?.snapshot?.(session, ['title'])
 			sessionTitle = noticeTitle(projection?.values?.title)
 		}
 	} catch { /* A missing title must not prevent the notice. */ }
