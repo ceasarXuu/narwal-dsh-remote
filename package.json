@@ -18,8 +18,8 @@
     "ios"
   ],
   "engines": {
-    "dsh": "*",
-    "node": ">=22"
+    "dsh": ">=0.2.2-rc.3 <0.3.0-0",
+    "node": "^24.22.3 || >=26.13.1"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.4",
@@ -31,14 +31,10 @@
     "provenance": false
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm-deepseek": "*",
-    "@deepseek-ai/dsh-llm-deepseek-api-key": "*"
+    "@deepseek-ai/dsh-deepseek-auth": ">=0.2.2-rc.3 <0.3.0-0"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-llm-deepseek": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-llm-deepseek-api-key": {
+    "@deepseek-ai/dsh-deepseek-auth": {
       "optional": true
     }
   },
