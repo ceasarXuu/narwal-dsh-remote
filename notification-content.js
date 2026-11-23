@@ -1,6 +1,8 @@
 const MAX_TITLE_LENGTH = 80
 const MAX_PREVIEW_LENGTH = 800
 const MAX_SOURCE_LENGTH = 2048
+const LOCK_SCREEN_TITLE = 72
+const LOCK_SCREEN_SUMMARY = 150
 
 function boundedText(value, limit) {
 	const text = value.trim()
@@ -43,14 +45,58 @@ function assistantPreview(data) {
 	return boundedText(text, MAX_PREVIEW_LENGTH)
 }
 
+export function publicAssistantReply(event) {
+	if (event?.type !== 'assistant/message' || event.ignorable || (event.surfaceOp && event.surfaceOp !== 'append') ||
+		!Number.isSafeInteger(event.data?.turn)) return undefined
+	return { turn: event.data.turn, preview: assistantPreview(event.data) }
+}
+
+function lockScreenText(value, limit) {
+	if (typeof value !== 'string') return undefined
+	return boundedText(value.replace(/[\p{Cc}\p{Cs}\u061C\u200E\u200F\u2028-\u202E\u2066-\u2069]/gu, ' ').replace(/\s+/gu, ' '), limit)
+}
+
+export function lockScreenTitles(ctx, sessionId, session, projectedTitle) {
+	const { workspaceTitle, sessionTitle } = notificationTitles(ctx, sessionId, session)
+	const workspace = lockScreenText(workspaceTitle, LOCK_SCREEN_TITLE)
+	const title = lockScreenText(projectedTitle ?? sessionTitle, LOCK_SCREEN_TITLE)
+	return { ...(workspace ? { workspace } : {}), ...(title ? { title } : {}) }
+}
+
+/** Keep the short lock-screen snippet to prose and visible labels. */
+export function lockScreenSummary(value) {
+	if (typeof value !== 'string') return undefined
+	const lines = []
+	let fence
+	for (const line of value.slice(0, MAX_SOURCE_LENGTH).split(/\r\n?|\n/u)) {
+		const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line)
+		if (fence) {
+			if (marker?.[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = undefined
+			continue
+		}
+		if (marker) { fence = marker[1]; continue }
+		if (/^(?: {4}|\t| {0,3}\[[^\]]+\]:)/u.test(line)) continue
+		lines.push(line.replace(/^ {0,3}(?:#{1,6}\s+|>+\s*|[-*+]\s+|\d+[.)]\s+)/u, ''))
+	}
+	const plain = lines.join('\n')
+		.replace(/<!--[^]*?(?:-->|$)/gu, ' ')
+		.replace(/<(script|style|pre|details)\b[^>]*>[^]*?(?:<\/\1\s*>|$)/giu, ' ')
+		.replace(/!?\[([^\[\]\n]*)\]\((?:[^()\n]|\([^()\n]*\))*\)/gu, '$1')
+		.replace(/!?\[([^\[\]\n]+)\]\[[^\]\n]*\]/gu, '$1')
+		.replace(/<[^<>\n]*>/gu, ' ')
+		.replace(/\b(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|www\.)[^\s<>()]+/giu, ' ')
+		.replace(/(\*{1,3}|_{1,3}|~~)(\S(?:.*?\S)?)\1/gu, '$2')
+		.replace(/`+/gu, '')
+	return lockScreenText(plain, LOCK_SCREEN_SUMMARY)
+}
+
 export function taskTurnNotices(ctx, emit) {
 	const lastReplies = new WeakMap()
 	return (session, event) => {
 		if (typeof session?.id !== 'string' || session.header?.origin === 'subagent') return
 		if (event?.type === 'assistant/message') {
-			if (event.ignorable || (event.surfaceOp && event.surfaceOp !== 'append') || !Number.isSafeInteger(event.data?.turn)) return
-			const preview = assistantPreview(event.data)
-			if (preview) lastReplies.set(session, { turn: event.data.turn, preview })
+			const reply = publicAssistantReply(event)
+			if (reply?.preview) lastReplies.set(session, reply)
 			return
 		}
 		if (event?.type !== 'turn/end') return

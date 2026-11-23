@@ -1,6 +1,9 @@
+import { lockScreenSummary, lockScreenTitles, publicAssistantReply } from './notification-content.js'
+
 const MAX_ACTIVITY_AGE = 8 * 60 * 60_000
 const RECOVERY_INTERVAL = 15_000
 const REFRESH_INTERVAL = 5 * 60_000
+const PREVIEW_RETRY_INTERVAL = 15 * 60_000
 const CHANGE_DELAY = 350
 const MAX_PENDING = 999
 const ACTIVITY_ID = /^[a-f0-9]{32}$/
@@ -24,7 +27,7 @@ function safeQuestionCount(questions) {
 		&& typeof item.question === 'string' && item.intent?.kind !== 'approval') ? questions.length : 0
 }
 
-function pendingQuestions(values, currentRequests) {
+function pendingQuestions(values, currentRequests, preview) {
 	const answered = new Set()
 	for (const target of ['next-step', 'next-turn']) {
 		for (const message of values?.inbox?.[target] ?? []) {
@@ -35,17 +38,27 @@ function pendingQuestions(values, currentRequests) {
 	const pending = new Map()
 	for (const item of values?.userQuestions?.active ?? []) {
 		if (typeof item?.callId === 'string' && (item.state === 'open' || item.state === 'continued')
-			&& !answered.has(item.callId)) pending.set(item.callId, safeQuestionCount(item.questions))
+			&& !answered.has(item.callId)) pending.set(item.callId, item.questions)
 	}
 	for (const request of currentRequests ?? []) {
 		const callId = request.wait?.callId
 		if (request.signal?.aborted || answered.has(callId)) continue
 		const key = callId ?? request
-		if (!pending.has(key)) pending.set(key, safeQuestionCount(request.questions))
+		if (!pending.has(key)) pending.set(key, request.questions)
 	}
 	let count = 0
-	for (const value of pending.values()) count += value
-	return Math.min(count, MAX_PENDING)
+	let summary
+	for (const questions of pending.values()) {
+		const length = safeQuestionCount(questions)
+		if (preview && length && !summary) {
+			for (const item of questions) {
+				summary = lockScreenSummary(item.question)
+				if (summary) break
+			}
+		}
+		count += length
+	}
+	return { pending: Math.min(count, MAX_PENDING), summary }
 }
 
 function terminalState(event) {
@@ -55,8 +68,18 @@ function terminalState(event) {
 	return 'stopped'
 }
 
+function completedReply(events, turn) {
+	if (!Number.isSafeInteger(turn)) return undefined
+	for (let index = events.length - 1; index >= 0; index--) {
+		const event = events[index]
+		if (event?.type === 'turn/start' && event.data?.turn === turn) break
+		const reply = publicAssistantReply(event)
+		if (reply?.turn === turn) return lockScreenSummary(reply.preview)
+	}
+}
+
 /** Reads the host's current Agent and question projection, also for a detached session. */
-async function readStatus(ctx, sessionId, requests, signal, ending) {
+async function readStatus(ctx, sessionId, requests, signal, ending, preview) {
 	let observation
 	try {
 		const workspace = ctx.get('workspaceRegistry')
@@ -69,7 +92,7 @@ async function readStatus(ctx, sessionId, requests, signal, ending) {
 		const session = sessions?.get(sessionId)
 		let values
 		if (session && typeof projections?.snapshot === 'function') {
-			values = projections.snapshot(session, ['userQuestions', 'inbox']).values
+			values = projections.snapshot(session, preview ? ['userQuestions', 'inbox', 'title'] : ['userQuestions', 'inbox']).values
 		} else if (typeof query?.observeSession === 'function') {
 			observation = await query.observeSession(sessionId, { signal, projectionMode: 'all' })
 			values = observation?.projections?.values
@@ -77,16 +100,28 @@ async function readStatus(ctx, sessionId, requests, signal, ending) {
 			return
 		}
 
-		const pending = pendingQuestions(values, requests)
-		if (pending > 0) return { state: 'waiting', pending }
-		if (agents?.get(sessionId)?.status === 'running') return { state: 'running', pending: 0 }
-		if (!ending) return { state: 'stopped', pending: 0 }
-		if (ending !== true) return { state: ending, pending: 0 }
-		if (!observation && typeof query?.observeSession === 'function') {
-			observation = await query.observeSession(sessionId, { signal, projectionMode: 'none' })
+		const titles = preview ? lockScreenTitles(ctx, sessionId, session, values?.title) : {}
+		const status = (state, pending = 0, summary) => ({ state, pending, ...titles, ...(summary ? { summary } : {}) })
+		const waiting = pendingQuestions(values, requests, preview)
+		if (waiting.pending > 0) return status('waiting', waiting.pending, waiting.summary)
+		if (agents?.get(sessionId)?.status === 'running') return status('running')
+		if (!ending) return status('stopped')
+		if (ending !== true && (!preview || ending.state !== 'completed' || ending.summary)) {
+			return status(ending.state, 0, preview ? ending.summary : undefined)
 		}
-		const turn = observation?.events?.findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
-		return { state: terminalState(turn), pending: 0 }
+		if (!observation && typeof query?.observeSession === 'function') {
+			try { observation = await query.observeSession(sessionId, { signal, projectionMode: 'none' }) }
+			catch (error) {
+				if (ending !== true && error?.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') return status(ending.state)
+				throw error
+			}
+		}
+		const events = observation?.events ?? []
+		const turn = events.findLast(event => event.type === 'turn/start' || event.type === 'turn/end')
+		const state = ending === true ? terminalState(turn) : ending.state
+		const summary = preview && state === 'completed' && session?.header?.origin !== 'subagent' && terminalState(turn) === 'completed' &&
+			(ending === true || turn.data?.turn === ending.turn) ? completedReply(events, turn.data?.turn) : undefined
+		return status(state, 0, summary)
 	} catch (error) {
 		if (error?.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return { state: 'stopped', pending: 0 }
 	} finally {
@@ -105,6 +140,7 @@ export class LiveActivities {
 		this.request = request
 		this.watches = new Map()
 		this.requests = new Map()
+		this.replies = new WeakMap()
 		this.operations = new Map()
 		this.controller = new AbortController()
 	}
@@ -121,23 +157,23 @@ export class LiveActivities {
 
 	isClosed() { return this.controller.signal.aborted }
 
-	status(sessionId, ending = false) {
+	status(sessionId, ending = false, preview = true) {
 		const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(4_000)])
-		return readStatus(this.ctx, sessionId, this.requests.get(sessionId), signal, ending)
+		return readStatus(this.ctx, sessionId, this.requests.get(sessionId), signal, ending, preview)
 	}
 
 	handle(id, active, method, args) {
 		if (!this.enabled || this.isClosed()) return false
-		const { activityId, sessionId, token, version, language } = args
+		const { activityId, sessionId, token, version, language, preview } = args
 		if (method === 'getLiveActivityStatus') {
 			if (!active || !validSession(sessionId)) return false
 			return this.status(sessionId).then(status => isActive(status) ? status : false)
 		}
 		if (typeof activityId !== 'string' || !ACTIVITY_ID.test(activityId)) return false
 		if (method === 'stopLiveActivity') return this.serial(id, () => this.stop(id, activityId))
-		if (!validSession(sessionId) || typeof token !== 'string' || !TOKEN.test(token)
+		if (!validSession(sessionId) || typeof token !== 'string' || !TOKEN.test(token) || (preview !== undefined && typeof preview !== 'boolean')
 			|| !Number.isSafeInteger(version) || version < 1 || !LANGUAGES.has(language)) return false
-		return this.serial(id, () => this.track(id, active, { activityId, sessionId, token, version, language }))
+		return this.serial(id, () => this.track(id, active, { activityId, sessionId, token, version, language, preview: preview === true }))
 	}
 
 	serial(id, operation) {
@@ -147,24 +183,24 @@ export class LiveActivities {
 		return next.finally(() => { if (this.operations.get(id) === next) this.operations.delete(id) })
 	}
 
-	async track(id, active, { activityId, sessionId, token, version, language }) {
+	async track(id, active, { activityId, sessionId, token, version, language, preview }) {
 		if (this.isClosed() || !this.paired(id)) return false
 		const previous = this.binding(id)?.activity
 		const sameActivity = previous?.activityId === activityId
 		if (sameActivity && (previous.sessionId !== sessionId || previous.version > version || previous.expiresAt <= Date.now())) return false
 		if (!sameActivity && !active) return false
-		const initial = await this.status(sessionId)
+		const initial = await this.status(sessionId, false, preview)
 		if (!sameActivity && !isActive(initial)) return false
 		if (!sameActivity && !await this.provision(id)) return false
 		if (this.isClosed() || !this.paired(id)) return false
 		const accepted = await this.request(id, '/activity', 'PUT', 'phone', { activityId, token, version, language }, this.controller.signal)
 		if (accepted !== 204 || this.isClosed() || !this.paired(id)) return false
-		const watch = sameActivity && previous.version === version
-			? previous : { activityId, sessionId, version, expiresAt: sameActivity ? previous.expiresAt : Date.now() + MAX_ACTIVITY_AGE }
+		const watch = sameActivity && previous.version === version && previous.preview === preview
+			? previous : { activityId, sessionId, version, preview, expiresAt: sameActivity ? previous.expiresAt : Date.now() + MAX_ACTIVITY_AGE }
 		this.set(id, watch)
 		this.schedule(id, watch)
 		this.recover()
-		const current = await this.status(sessionId)
+		const current = await this.status(sessionId, false, preview)
 		if (this.isClosed() || !this.paired(id)) return false
 		return isActive(current) ? current : false
 	}
@@ -203,9 +239,21 @@ export class LiveActivities {
 		listen('api-session/removed', sessionId => this.changed(sessionId), options)
 		listen('session/event', (session, event) => {
 			const type = event?.type
-			if (type === 'turn/start') this.changed(session.id, true)
-			else if (type === 'turn/end') this.changed(session.id, terminalState(event))
-			else if (type === 'agent/inbox/spliced' || type?.startsWith('user-question')) this.changed(session.id)
+			if (type === 'assistant/message' && session.header?.origin !== 'subagent' &&
+				[...this.watches.values()].some(entry => entry.activity.sessionId === session.id && entry.activity.preview === true)) {
+				const reply = publicAssistantReply(event)
+				if (reply) this.replies.set(session, reply)
+			} else if (type === 'turn/start') {
+				this.replies.delete(session)
+				this.changed(session.id, true)
+			} else if (type === 'turn/end') {
+				const reply = this.replies.get(session)
+				this.replies.delete(session)
+				const state = terminalState(event)
+				const turn = event.data?.turn
+				const summary = state === 'completed' && reply && reply.turn === turn ? lockScreenSummary(reply.preview) : undefined
+				this.changed(session.id, { state, turn, summary })
+			} else if (type === 'agent/inbox/spliced' || type?.startsWith('user-question')) this.changed(session.id)
 		}, options)
 		listen('user-questions/request', async (request, next) => {
 			const sessionId = request.agent?.session?.id
@@ -278,10 +326,11 @@ export class LiveActivities {
 	async refresh(id, entry) {
 		if (!this.current(id, entry)) return
 		const observedEnding = entry.ending
-		const status = await this.status(entry.activity.sessionId, observedEnding)
+		const preview = entry.activity.preview === true && (entry.previewRetryAt ?? 0) <= Date.now()
+		const status = await this.status(entry.activity.sessionId, observedEnding, preview)
 		if (!status || !this.current(id, entry)) return
 		if (observedEnding !== entry.ending) return
-		const key = status.state + ':' + status.pending
+		const key = JSON.stringify(status)
 		const time = Date.now()
 		if (key !== entry.key) {
 			entry.key = key
@@ -291,9 +340,18 @@ export class LiveActivities {
 		if (entry.when > time) return
 		let accepted
 		try {
-			accepted = await this.request(id, '/activity/deliveries', 'POST', 'desktop', {
-				activityId: entry.activity.activityId, ...status,
+			const deliver = (state) => this.request(id, '/activity/deliveries', 'POST', 'desktop', {
+				activityId: entry.activity.activityId, ...state,
 			}, this.controller.signal)
+			accepted = await deliver(status)
+			if (accepted === 422 && preview && (status.workspace || status.title || status.summary) && this.current(id, entry)) {
+				// Older gateways reject the extra fields before admitting the update.
+				entry.previewRetryAt = Date.now() + PREVIEW_RETRY_INTERVAL
+				if (observedEnding !== entry.ending) return
+				const legacy = { state: status.state, pending: status.pending }
+				entry.key = JSON.stringify(legacy)
+				accepted = await deliver(legacy)
+			}
 		} catch { /* Reconcile the newest state on a later heartbeat. */ }
 		if (!this.current(id, entry)) return
 		if (DROPPED.has(accepted) || (accepted === 204 && TERMINAL.has(status.state))) {
