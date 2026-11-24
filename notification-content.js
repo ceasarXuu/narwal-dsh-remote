@@ -90,6 +90,17 @@ export function lockScreenSummary(value) {
 	return lockScreenText(plain, LOCK_SCREEN_SUMMARY)
 }
 
+/** Plain fields for the opt-in encrypted notification preview. */
+export function notificationPreview({ workspaceTitle, sessionTitle, summary }) {
+	const title = value => typeof value === 'string'
+		? lockScreenText(value.slice(0, MAX_SOURCE_LENGTH), MAX_TITLE_LENGTH) : undefined
+	return {
+		workspaceTitle: title(workspaceTitle),
+		sessionTitle: title(sessionTitle),
+		summary: lockScreenSummary(summary),
+	}
+}
+
 export function taskTurnNotices(ctx, emit) {
 	const lastReplies = new WeakMap()
 	return (session, event) => {

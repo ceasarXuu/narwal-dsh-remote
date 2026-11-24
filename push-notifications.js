@@ -1,13 +1,17 @@
 import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto'
 import { lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { notificationTitles } from './notification-content.js?push'
+import { notificationPreview, notificationTitles } from './notification-content.js?push'
 import { LIVE_ACTIVITY_METHODS, LiveActivities } from './live-activities.js'
 
 const hex = (value, size) => typeof value === 'string' && value.length === size && /^[a-f0-9]+$/.test(value)
 const digest = value => createHash('sha256').update(value).digest('hex')
 const derive = (seed, purpose) => createHmac('sha256', Buffer.from(seed, 'hex')).update(purpose).digest('hex')
 const expiry = 120
+const PREVIEW_DOMAIN = 'narwal/push/preview/v1'
+const PREVIEW_MAX_LENGTH = 1_600
+const PREVIEW_ENVELOPE_MAX_LENGTH = 3_200
+const PREVIEW_SOURCE_MAX_LENGTH = 2_048
 const taskKinds = new Set(['task-complete', 'agent-question', 'task-failed', 'tool-approval'])
 
 function credentials(record) {
@@ -17,6 +21,7 @@ function credentials(record) {
 		phone: derive(seed, 'narwal/push/phone'),
 		desktop: derive(seed, 'narwal/push/desktop'),
 		seal: derive(seed, 'narwal/push/seal'),
+		previewKey: derive(seed, PREVIEW_DOMAIN),
 	}
 }
 
@@ -28,6 +33,25 @@ function sealLink(key, payload) {
 		...(payload.callId ? { callId: payload.callId } : {}),
 	})
 	return Buffer.concat([iv, cipher.update(plaintext), cipher.final(), cipher.getAuthTag()]).toString('base64')
+}
+
+function sealPreview(key, binding, eventKey, content) {
+	const iv = randomBytes(12)
+	const cipher = createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv)
+	cipher.setAAD(Buffer.from(`${PREVIEW_DOMAIN}:${binding}:${eventKey}`, 'utf8'))
+	return Buffer.concat([
+		iv, cipher.update(JSON.stringify(content), 'utf8'), cipher.final(), cipher.getAuthTag(),
+	]).toString('base64')
+}
+
+function previewContent(payload) {
+	const content = notificationPreview({
+		workspaceTitle: payload.workspaceTitle,
+		sessionTitle: payload.sessionTitle,
+		summary: payload.kind === 'task-complete' || payload.kind === 'agent-question' ? payload.preview : undefined,
+	})
+	const fields = Object.entries(content).filter(([, value]) => typeof value === 'string' && value.length)
+	return fields.length ? Object.fromEntries(fields) : undefined
 }
 
 function load(file) {
@@ -116,7 +140,10 @@ export class PushNotifications {
 			phoneHash: digest(keys.phone), desktopHash: digest(keys.desktop),
 		})
 		if (status !== 204 || !this.pairings().paired(id)) return null
-		return { binding: keys.binding, registration: keys.phone, seal: keys.seal, url: this.clientUrl }
+		return {
+			binding: keys.binding, registration: keys.phone, seal: keys.seal,
+			url: this.clientUrl, previewKey: keys.previewKey,
+		}
 	}
 
 	handle(device, method, args) {
@@ -131,8 +158,12 @@ export class PushNotifications {
 			if (record) {
 				const enabled = record.enabled || args.registered === true
 				const taskActions = device.pushTaskActions
-				if (enabled !== record.enabled || taskActions !== Boolean(record.taskActions)) {
-					this.save(new Map(this.bindings).set(id, { ...record, enabled, taskActions }))
+				const preview = typeof args.preview === 'boolean' ? args.preview : record.preview === true
+				const previewChanged = typeof args.preview === 'boolean' && preview !== record.preview
+				if (enabled !== record.enabled || taskActions !== Boolean(record.taskActions) || previewChanged) {
+					this.save(new Map(this.bindings).set(id, {
+						...record, enabled, taskActions, ...(typeof args.preview === 'boolean' ? { preview } : {}),
+					}))
 				}
 			}
 			device.pushUntil = args.foreground ? Date.now() + 15_000 : 0
@@ -174,8 +205,25 @@ export class PushNotifications {
 		this.save(this.bindings, events.set(eventKey, time))
 		if (device && await this.offer(device, eventKey, payload)) return
 		if (!record.enabled || !this.pairings().paired(id) || Date.now() >= time + expiry * 1_000) return
-		const data = { eventKey, envelope: sealLink(keys.seal, payload), expiresAt: Math.floor(time / 1_000) + expiry }
-		const status = await this.request(keys.binding, '/deliveries', 'POST', keys.desktop, data)
+		const envelope = sealLink(keys.seal, payload)
+		const expiresAt = Math.floor(time / 1_000) + expiry
+		let preview
+		if (record.preview === true) {
+			const content = previewContent(payload)
+			if (content) {
+				preview = sealPreview(keys.previewKey, keys.binding, eventKey, content)
+				if (preview.length > PREVIEW_MAX_LENGTH
+					|| preview.length + envelope.length > PREVIEW_ENVELOPE_MAX_LENGTH) {
+					preview = undefined
+				}
+			}
+		}
+		const data = { eventKey, envelope, expiresAt, ...(preview ? { preview } : {}) }
+		let status = await this.request(keys.binding, '/deliveries', 'POST', keys.desktop, data)
+		if (status === 422 && preview) {
+			// Older gateways reject the preview field before admitting the delivery.
+			status = await this.request(keys.binding, '/deliveries', 'POST', keys.desktop, { eventKey, envelope, expiresAt })
+		}
 		if (status !== 202 && status !== 409 && status !== 410) this.log.warn('Push service did not accept a delivery (%d)', status)
 	}
 
@@ -226,9 +274,13 @@ export function listenForPushRequests(bridge, listen) {
 		if (bridge.stopping || typeof session?.id !== 'string' || session.header?.origin === 'subagent' || request.signal?.aborted) return
 		const eventId = callId || transient.get(request) || randomBytes(16).toString('hex')
 		if (!callId) transient.set(request, eventId)
+		const question = kind === 'agent-question' && Array.isArray(request.questions)
+			? request.questions.find(item => item?.intent?.kind !== 'approval' && typeof item?.question === 'string' && item.question.trim())
+			: undefined
 		bridge.push.publish({
 			kind, sessionId: session.id, callId, eventId,
 			...notificationTitles(bridge.ctx, session.id, session),
+			...(question ? { preview: question.question.slice(0, PREVIEW_SOURCE_MAX_LENGTH) } : {}),
 		})
 	}
 	const options = { global: true, prepend: true }
