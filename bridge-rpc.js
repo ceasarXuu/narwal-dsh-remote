@@ -184,7 +184,7 @@ export function handleDeviceFrame(bridge, device, text) {
 		result = Promise.resolve().then(() => answerUserQuestion(device, args))
 	} else if (ns === 'narwal' && method === 'getSessionSummaries') {
 		const readList = () => bridge.deps.invoke({ namespace: 'session', method: 'list', args: { _request: {} }, peer: device.peer })
-		result = readSessionSummaries(readList, args.knownRevision)
+		result = readSessionSummaries(readList, args.knownRevision, Boolean(device.transport && args.encoding === 'gzip-shape'))
 	} else if (ns === 'narwal' && method === 'getSessionCursor') {
 		result = bridge.deps.invoke({ namespace: 'session', method: 'projections', args, peer: device.peer })
 			.then(baseline => ({ kind: baseline?.kind, asOfSeq: baseline?.asOfSeq }))
