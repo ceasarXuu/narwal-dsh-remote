@@ -9,6 +9,19 @@ const MAX_FRAGMENTS = MESSAGE_BYTES / CHUNK_BYTES
 const FRAGMENT_TTL_MS = 30_000
 const RELAY_BYTES_PER_MS = 100
 const PROMPT_REPLY_BYTES = 4 * 1024
+const ARTIFACT_REPLY_FLAG = 4
+
+export function encodeArtifactReply(id, data) {
+	if (typeof id !== 'string' || !/^i[1-9]\d{0,15}$/.test(id) || !data.length || data.length + id.length + 1 > CHUNK_BYTES) {
+		return JSON.stringify({ id, ok: true, value: { data: data.toString('base64') } })
+	}
+	const headerLength = id.length + 1
+	const packet = Buffer.allocUnsafe(headerLength + data.length)
+	packet[0] = id.length
+	packet.write(id, 1, 'ascii')
+	data.copy(packet, headerLength)
+	return packet
+}
 
 export function readRecord(data) {
 	return Buffer.from(data).toString('base64')
@@ -93,7 +106,8 @@ export class RelaySecureSocket extends EventEmitter {
 	}
 
 	send(data, done, unary = false) {
-		const body = Buffer.from(data)
+		const artifact = Buffer.isBuffer(data)
+		const body = artifact ? data : Buffer.from(data)
 		if (this.closed || !this.selected()) return done?.(new Error('Secure socket is no longer active'))
 		if (!body.length || this.outboundBytes + body.length > MESSAGE_BYTES || this.outgoing.length >= MAX_PENDING_MESSAGES) {
 			done?.(new Error('Secure message budget exhausted'))
@@ -101,7 +115,7 @@ export class RelaySecureSocket extends EventEmitter {
 			return
 		}
 		const compact = this.compactReplies && unary && body.length <= CHUNK_BYTES
-		this.outgoing.push({ body, offset: 0, wireBytes: 0, interleavedBytes: 0, done, compact })
+		this.outgoing.push({ body, offset: 0, wireBytes: 0, interleavedBytes: 0, done, compact, artifact })
 		this.outboundBytes += body.length
 		this.writeNext()
 	}
@@ -134,7 +148,7 @@ export class RelaySecureSocket extends EventEmitter {
 		const end = Math.min(item.offset + CHUNK_BYTES, item.body.length)
 		const complete = end === item.body.length
 		const plaintext = Buffer.allocUnsafe(end - item.offset + 1)
-		plaintext[0] = interruptedMessage ? 3 : complete ? 0 : 1
+		plaintext[0] = item.artifact ? ARTIFACT_REPLY_FLAG : interruptedMessage ? 3 : complete ? 0 : 1
 		item.body.copy(plaintext, 1, item.offset, end)
 		this.writing = true
 		try {

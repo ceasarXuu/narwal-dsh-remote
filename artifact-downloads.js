@@ -193,7 +193,8 @@ export async function invokeArtifactDownload(ctx, method, args) {
 		if (!bytesToRead) return { data: '' }
 		const bytes = await read(offset, bytesToRead)
 		if (bytes?.byteLength !== bytesToRead) throw changed()
-		return { data: Buffer.from(bytes).toString('base64') }
+		const data = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+		return { data: args.encoding === 'binary' ? data : data.toString('base64') }
 	} catch (error) {
 		if (typeof error?.code === 'string' && error.code.startsWith('narwal/artifact-')) throw error
 		throw unavailable()

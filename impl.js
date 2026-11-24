@@ -14,6 +14,7 @@ import { closeAllLocalWeb, closeLocalWebDevice } from './local-web.js?websocket-
 import { createMaidInstaller } from './maid-install.js?profile'
 import { notificationTitles, sendLegacyNotice, taskTurnNotices } from './notification-content.js?final-reply'
 import { createPushNotifications, listenForPushRequests } from './push-notifications.js?live-activity'
+import { encodeArtifactReply } from './relay-secure-socket.js'
 import { loadRelayV2 } from './relay-v2.js?attachment-upload'
 // A linked DSH profile can still have the pre-pairing modules in its ESM cache.
 import { TokenStore } from './token-store.js?device-pairing'
@@ -397,7 +398,8 @@ class NarwalBridge {
 	send(device, frame, { meter = true, unary = false } = {}) {
 		if (device.disposed) return
 		try {
-			const payload = JSON.stringify(frame)
+			const payload = device.transport && Buffer.isBuffer(frame.value?.data)
+				? encodeArtifactReply(frame.id, frame.value.data) : JSON.stringify(frame)
 			const transport = device.transport ?? (device.socket === this.relay?.socket ? 'relay' : 'wifi')
 			const bytes = meter ? Buffer.byteLength(payload) : 0
 			const sent = (error, wireBytes) => {
