@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const NAME = '@ceasarxuu/dsh-maid'
-const VERSION = '0.1.21'
-const SHA256 = '59150871e1609d9273e8004f1e0d4f23bbe2462a27af875ba99d3773be80e128'
+const VERSION = '0.1.22'
+const SHA256 = 'c3fc827346f8a0f5ff7e799062d9911e554df9833171a5e5da734b2e9d05f6a8'
 const BOOT_TIMEOUT = 30_000
 const REGISTRY = 'https://registry.npmjs.org'
 export const MAID_ARCHIVE = 'vendor/dsh-maid.tgz'
