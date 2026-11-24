@@ -168,7 +168,7 @@ export function handleDeviceFrame(bridge, device, text) {
 			reply(installer.start(method === 'installGitHubProjects' ? 'install' : 'enable'))
 			return
 		}
-		void readGitHubProjects(bridge.ctx.get('webServer'), installer, args).then(reply).catch((error) => {
+		void readGitHubProjects(bridge.ctx, installer, args).then(reply).catch((error) => {
 			sendResult({ id, ok: false, error: { code: error.code, message: error.message, details: error.details } })
 		})
 		return

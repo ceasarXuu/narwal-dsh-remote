@@ -63,18 +63,39 @@ async function readRoute(origin, route, query, signal) {
 	return payload
 }
 
-export async function readGitHubProjects(webServer, installer, args) {
+async function readService(reader, route, query, signal) {
+	signal.throwIfAborted()
+	const abort = Promise.withResolvers()
+	const onAbort = () => abort.reject(signal.reason)
+	signal.addEventListener('abort', onAbort, { once: true })
+	try {
+		const payload = await Promise.race([reader[route](new URLSearchParams(query)), abort.promise])
+		if (Buffer.byteLength(JSON.stringify(payload)) > MAX_RESPONSE_BYTES) throw projectsError()
+		return payload
+	} catch (error) {
+		throw projectsError(signal.aborted ? 'timeout' : error?.code)
+	} finally {
+		signal.removeEventListener('abort', onAbort)
+	}
+}
+
+export async function readGitHubProjects(ctx, installer, args) {
 	const target = args?.target
 	const id = typeof args?.id === 'string' ? args.id.trim() : ''
 	if ((target !== 'workspace' && target !== 'session') || id === '' || id.length > 200) {
 		throw Object.assign(new Error('缺少有效的工作区或会话。'), { code: 'narwal/bad-request' })
 	}
-	const origin = getLoopbackOrigin(webServer)
-	if (!origin) return { kind: 'unavailable' }
+	const reader = ctx.get('githubProjectsReader')
+	const hasReader = ['config', 'items', 'issue'].every(route => typeof reader?.[route] === 'function')
+	const origin = hasReader ? null : getLoopbackOrigin(ctx.get('webServer'))
+	if (!hasReader && !origin) return { kind: 'unavailable' }
 	const signal = AbortSignal.timeout(READ_TIMEOUT_MS)
+	const read = hasReader
+		? (route, query) => readService(reader, route, query, signal)
+		: (route, query) => readRoute(origin, route, query, signal)
 	try {
 		const key = target === 'workspace' ? 'workspaceId' : 'sessionId'
-		const config = await readRoute(origin, 'config', { [key]: id }, signal)
+		const config = await read('config', { [key]: id })
 		if (config === null) {
 			const availability = await installer.availability()
 			return availability.kind === 'registered' ? { kind: 'unavailable' } : availability
@@ -86,13 +107,13 @@ export async function readGitHubProjects(webServer, installer, args) {
 			const project = binding.project
 			if (project === null) return { kind: 'unbound' }
 			if (typeof project?.owner !== 'string' || !Number.isSafeInteger(project.number) || project.number < 1) throw projectsError()
-			const data = await readRoute(origin, 'items', { ...query, owner: project.owner, number: project.number }, signal)
+			const data = await read('items', { ...query, owner: project.owner, number: project.number })
 			return { kind: 'project', data }
 		}
 		const issue = binding.issue
 		if (issue === null) return { kind: 'unbound' }
 		if (typeof issue?.repo !== 'string' || !Number.isSafeInteger(issue.number) || issue.number < 1) throw projectsError()
-		const data = await readRoute(origin, 'issue', { ...query, repo: issue.repo, number: issue.number }, signal)
+		const data = await read('issue', { ...query, repo: issue.repo, number: issue.number })
 		return { kind: 'issue', data }
 	} catch (error) {
 		if (error?.code === 'narwal/github-projects') throw error
