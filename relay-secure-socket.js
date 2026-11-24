@@ -10,6 +10,8 @@ const FRAGMENT_TTL_MS = 30_000
 const RELAY_BYTES_PER_MS = 100
 const PROMPT_REPLY_BYTES = 4 * 1024
 const ARTIFACT_REPLY_FLAG = 4
+const BINARY_UPLOAD_FLAG = 5
+const MAX_UPLOAD_HEADER_BYTES = 1024
 
 export function encodeArtifactReply(id, data) {
 	if (typeof id !== 'string' || !/^i[1-9]\d{0,15}$/.test(id) || !data.length || data.length + id.length + 1 > CHUNK_BYTES) {
@@ -75,6 +77,7 @@ export class RelaySecureSocket extends EventEmitter {
 		const [flag] = plaintext
 		const body = plaintext.subarray(1)
 		if (flag === 2) return this.receiveControl(body)
+		if (flag === BINARY_UPLOAD_FLAG) return this.receiveUpload(body)
 		if ((flag !== 0 && flag !== 1) || !body.length || body.length > CHUNK_BYTES ||
 			this.fragments.length >= MAX_FRAGMENTS || this.inboundBytes + body.length > MESSAGE_BYTES) {
 			throw new Error('Invalid secure message fragment')
@@ -95,6 +98,17 @@ export class RelaySecureSocket extends EventEmitter {
 			return
 		}
 		this.emit('message', value)
+	}
+
+	receiveUpload(body) {
+		if (this.fragments.length || body.length < 4 || body.length > CHUNK_BYTES) throw new Error('Invalid binary upload record')
+		const headerLength = body.readUInt16BE(0)
+		const bodyOffset = 2 + headerLength
+		if (!headerLength || headerLength > MAX_UPLOAD_HEADER_BYTES || bodyOffset >= body.length) throw new Error('Invalid binary upload header')
+		const { id, sessionId, uploadId, offset } = JSON.parse(body.toString('utf8', 2, bodyOffset))
+		if (typeof id !== 'string' || !/^i[1-9]\d{0,15}$/.test(id)) throw new Error('Invalid binary upload request ID')
+		this.emit('message', { id, ns: 'narwal', method: 'attachmentUpload',
+			args: { action: 'append', sessionId, uploadId, offset, data: body.subarray(bodyOffset) } })
 	}
 
 	receiveControl(body) {

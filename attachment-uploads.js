@@ -43,7 +43,12 @@ function details({ name, size, mediaType }) {
 }
 
 function decodeChunk({ offset, data }) {
-	if (!Number.isSafeInteger(offset) || offset < 0 || typeof data !== 'string' || !data.length || data.length > CHUNK_BYTES * 4 / 3) {
+	if (!Number.isSafeInteger(offset) || offset < 0 || !data?.length) throw badRequest()
+	if (Buffer.isBuffer(data)) {
+		if (data.length > CHUNK_BYTES) throw badRequest()
+		return data
+	}
+	if (typeof data !== 'string' || data.length > CHUNK_BYTES * 4 / 3) {
 		throw badRequest()
 	}
 	const bytes = Buffer.from(data, 'base64')

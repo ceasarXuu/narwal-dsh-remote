@@ -346,7 +346,7 @@ class NarwalBridge {
 				sessionId, label: device.label, host: this.hostLabel(), hostname: hostname(),
 				account: active ? this.account : undefined, githubProjects: transport !== 'relay', sessionSummaries: true, filteredSessionControl: true, sessionTranscript: true, workspaceExpansion: true, maid: Boolean(transport), localWeb: Boolean(transport), desktopId: this.store.getDesktopId(),
 				artifactDownloads: Boolean(transport) && supportsArtifactDownloads(this.ctx),
-				...(transport && this.attachmentUploads.available && { resumableUploads: true }),
+				...(transport && this.attachmentUploads.available && { resumableUploads: true, binaryUploads: true }),
 				push: device.pushLocal === true, liveActivity: Boolean(transport && this.push?.liveActivities?.enabled),
 				maidSessionId: transport ? this.ctx.get('maidConversation')?.sessionId : undefined,
 			},
