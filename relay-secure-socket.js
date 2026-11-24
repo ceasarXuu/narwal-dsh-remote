@@ -8,6 +8,7 @@ const MAX_PENDING_MESSAGES = 128
 const MAX_FRAGMENTS = MESSAGE_BYTES / CHUNK_BYTES
 const FRAGMENT_TTL_MS = 30_000
 const RELAY_BYTES_PER_MS = 100
+const PROMPT_REPLY_BYTES = 4 * 1024
 
 export function readRecord(data) {
 	return Buffer.from(data).toString('base64')
@@ -106,27 +107,34 @@ export class RelaySecureSocket extends EventEmitter {
 	}
 
 	writeNext() {
-		if (this.closed || this.writing || this.writeTimer || !this.outgoing.length) return
+		if (this.closed || this.writing || !this.outgoing.length) return
 		if (!this.selected()) return this.terminate()
+		const head = this.outgoing[0]
+		const mayInterleave = head.offset > 0 && !this.lastWasCompact
+		// Bound interleaving during a fragmented message independently of the relay rate.
+		const budget = Math.max(CHUNK_BYTES, head.offset / 4) - head.interleavedBytes
 		const delay = Math.ceil(this.nextSend - performance.now())
-		if (delay > 0) {
-			this.writeTimer = setTimeout(() => {
+		const promptReply = delay > 0 && !this.lastWasCompact
+			? this.outgoing.findIndex(item => item.offset === 0 && item.compact &&
+				item.body.length <= Math.min(PROMPT_REPLY_BYTES, budget)) : -1
+		if (delay > 0 && promptReply < 0) {
+			this.writeTimer ??= setTimeout(() => {
 				this.writeTimer = null
 				this.writeNext()
 			}, delay).unref()
 			return
 		}
-		const head = this.outgoing[0]
-		const mayInterleave = head.offset > 0 && !this.lastWasCompact
+		clearTimeout(this.writeTimer)
+		this.writeTimer = null
 		const candidate = mayInterleave ? this.outgoing.findIndex(item => item.compact) : -1
-		// Allow a prompt first reply and cap sustained bypass traffic at one quarter of regular output.
-		const budget = Math.max(CHUNK_BYTES, head.offset / 4) - head.interleavedBytes
-		const index = candidate > 0 && this.outgoing[candidate].body.length <= budget ? candidate : 0
+		const interleave = candidate > 0 && this.outgoing[candidate].body.length <= budget ? candidate : 0
+		const index = promptReply >= 0 ? promptReply : interleave
+		const interruptedMessage = index > 0 && head.offset > 0
 		const item = this.outgoing[index]
 		const end = Math.min(item.offset + CHUNK_BYTES, item.body.length)
 		const complete = end === item.body.length
 		const plaintext = Buffer.allocUnsafe(end - item.offset + 1)
-		plaintext[0] = index > 0 ? 3 : complete ? 0 : 1
+		plaintext[0] = interruptedMessage ? 3 : complete ? 0 : 1
 		item.body.copy(plaintext, 1, item.offset, end)
 		this.writing = true
 		try {
@@ -136,9 +144,11 @@ export class RelaySecureSocket extends EventEmitter {
 				if (error) return this.terminate()
 				item.offset = end
 				item.wireBytes += plaintext.length + 16
-				this.lastWasCompact = index > 0
-				if (index > 0) head.interleavedBytes += item.body.length
-				if (this.transport === 'relay') this.nextSend = performance.now() + (plaintext.length + 16) / RELAY_BYTES_PER_MS
+				this.lastWasCompact = promptReply >= 0 || interruptedMessage
+				if (interruptedMessage) head.interleavedBytes += item.body.length
+				// An early reply borrows time from the next regular frame without raising the sustained rate.
+				if (this.transport === 'relay') this.nextSend = Math.max(this.nextSend, performance.now()) +
+					(plaintext.length + 16) / RELAY_BYTES_PER_MS
 				if (complete) {
 					this.outgoing.splice(index, 1)
 					this.outboundBytes -= item.body.length
