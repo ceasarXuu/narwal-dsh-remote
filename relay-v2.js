@@ -166,13 +166,15 @@ class RelayV2 {
 		if (expiresAt <= Date.now()) return
 		const entry = { attempts: 0, socket: null, timer: null, healthy: null, terminal: false }
 		this.dialers.set(record.id, entry)
-		const retry = (quick = false) => {
+		const retry = ({ quick = false, retryAfterMs = 0 } = {}) => {
 			if (this.closed || entry.terminal || expiresAt <= Date.now() || entry.timer) return
 			const ceiling = quick ? 250 : Math.min(1_000 * 2 ** Math.min(entry.attempts++, 6), 60_000)
+			const backoff = Math.random() * ceiling
+			const delay = retryAfterMs ? Math.max(backoff, retryAfterMs + Math.random() * 150) : backoff
 			entry.timer = setTimeout(() => {
 				entry.timer = null
 				dial()
-			}, Math.max(25, Math.random() * ceiling)).unref()
+			}, Math.max(25, delay)).unref()
 		}
 		const dial = () => {
 			if (this.closed || entry.terminal || expiresAt <= Date.now() || !this.pairings.paired(record.id)) return
@@ -185,21 +187,30 @@ class RelayV2 {
 				})
 			} catch { return retry() }
 			entry.socket = socket
+			let activated = false
+			let retryAfterMs = 0
 			socket.on('error', () => { /* close schedules retry */ })
 			socket.on('unexpected-response', (_request, response) => {
 				if (response.statusCode === 401 || response.statusCode === 403) entry.terminal = true
+				const retryAfter = response.headers['retry-after']
+				if (response.statusCode === 429 && typeof retryAfter === 'string' && /^[0-9]{1,5}$/.test(retryAfter)) {
+					retryAfterMs = Number(retryAfter) * 1_000
+				}
 				response.resume()
 				socket.terminate()
 			})
 			socket.once('open', () => {
 				entry.healthy = setTimeout(() => { entry.attempts = 0 }, 20_000).unref()
-				this.accept(socket, 'session', record, 'relay', () => { entry.attempts = 0 })
+				this.accept(socket, 'session', record, 'relay', () => {
+					activated = true
+					entry.attempts = 0
+				})
 			})
 			socket.once('close', (code, reason) => {
 				clearTimeout(entry.healthy)
 				entry.socket = null
 				if (code === 4003 || code === 4005) entry.terminal = true
-				retry(code === 1000 || (code === 4000 && reason.toString() === 'peer_left'))
+				retry({ quick: activated || code === 1000 || (code === 4000 && reason.toString() === 'peer_left'), retryAfterMs })
 			})
 		}
 		dial()
