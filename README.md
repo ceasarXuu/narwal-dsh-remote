@@ -57,4 +57,4 @@ NARWAL_NOISE_DIR=/path/to/Narwal/packages/relay-crypto/dist/node npm run pack --
 
 Install the archive in your DSH profile. The private archive bundles the native addon and bridge runtime for local distribution. The destination can load the addon directly from the installed package without setting `NARWAL_NOISE_DIR` or checking out Narwal.
 
-[Privacy policy draft](https://ceasarxuu.github.io/narwal-dsh-remote/privacy.html) · [Service statement draft](https://ceasarxuu.github.io/narwal-dsh-remote/service.html) · [MIT license](https://github.com/ceasarXuu/narwal-dsh-remote/blob/main/LICENSE)
+[Privacy policy](https://ceasarxuu.github.io/narwal-dsh-remote/privacy.html) · [Service statement](https://ceasarxuu.github.io/narwal-dsh-remote/service.html) · [MIT license](https://github.com/ceasarXuu/narwal-dsh-remote/blob/main/LICENSE)
